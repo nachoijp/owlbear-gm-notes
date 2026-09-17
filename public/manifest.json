@@ -1,0 +1,15 @@
+{
+  "name": "GM Notes",
+  "version": "1.0.0",
+  "manifest_version": 3,
+  "author": "Ignacio Pedraza",
+  "icon": "https://notes.ijpedraza.com/logo.svg",
+  "description": "Rich-text notes for the GM only — a private campaign journal that stays out of players' hands.",
+  "action": {
+    "title": "GM Notes",
+    "icon": "https://notes.ijpedraza.com/icon-toolbar.png",
+    "popover": "/",
+    "width": 434,
+    "height": 580
+  }
+}
