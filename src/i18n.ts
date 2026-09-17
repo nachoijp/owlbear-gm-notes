@@ -53,8 +53,7 @@ export interface Strings {
   settingsAccentLabel: string;
   settingsLangLabel: string;
   settingsStorageLabel: string;
-  storageMeterText: (usedKB: string, capKB: number) => string;
-  storageBannerLimit: string;
+  storageMeterText: (usedKB: string) => string;
   storageBannerGeneric: string;
   accentAutoTitle: string;
   exportTitle: string;
@@ -65,6 +64,8 @@ export interface Strings {
   importBtn: string;
   importNoneFound: string;
   importSuccess: (n: number) => string;
+  clearAllBtn: string;
+  clearAllConfirm: (n: number) => string;
   toolbar: ToolbarStrings;
 }
 
@@ -100,19 +101,20 @@ const STRINGS: Record<Language, Strings> = {
     settingsClose: "Cerrar",
     settingsAccentLabel: "Color de acento",
     settingsLangLabel: "Idioma",
-    settingsStorageLabel: "Espacio usado en la sala",
-    storageMeterText: (usedKB, capKB) => `${usedKB} / ${capKB} KB`,
-    storageBannerLimit: "No se pudo guardar: la sala llegó al límite de almacenamiento compartido (16 KB entre todas las extensiones). Abrí la consola (F12) para ver qué extensión está usando más espacio.",
-    storageBannerGeneric: "No se pudo guardar el último cambio. Revisá tu conexión e intentá de nuevo.",
+    settingsStorageLabel: "Espacio usado en este dispositivo",
+    storageMeterText: (usedKB) => `${usedKB} KB`,
+    storageBannerGeneric: "No se pudo guardar el último cambio. Si estás en una ventana privada o con el almacenamiento del navegador bloqueado, probá desactivarlo para esta página.",
     accentAutoTitle: "Automático (seguir Owlbear)",
     exportTitle: "Exportar nota",
     exportAria: "Exportar ",
     settingsBackupLabel: "Respaldo de notas",
-    backupHint: "Exportá notas a un archivo para liberar espacio sin perderlas, e importalas de nuevo cuando quieras.",
+    backupHint: "Las notas se guardan en este dispositivo, no en la sala. Exportalas a un archivo para llevarlas a otro dispositivo o como respaldo, e importalas cuando quieras.",
     exportAllBtn: "Exportar todas",
     importBtn: "Importar",
     importNoneFound: "No se encontró ninguna nota válida en el/los archivo(s) elegido(s).",
     importSuccess: (n) => n === 1 ? "Se importó 1 nota." : `Se importaron ${n} notas.`,
+    clearAllBtn: "Borrar todas las notas",
+    clearAllConfirm: (n) => `¿Borrar las ${n} nota(s) guardadas en este dispositivo para esta sala? Esta acción no se puede deshacer — exportalas antes si querés conservarlas.`,
     toolbar: {
       bold: "Negrita (Ctrl+B)", italic: "Cursiva (Ctrl+I)", underline: "Subrayado (Ctrl+U)", strike: "Tachado",
       pill: "Píldora de color", pillNone: "Quitar color", textColor: "Color de texto", textColorNone: "Color por defecto",
@@ -152,19 +154,20 @@ const STRINGS: Record<Language, Strings> = {
     settingsClose: "Close",
     settingsAccentLabel: "Accent color",
     settingsLangLabel: "Language",
-    settingsStorageLabel: "Room storage used",
-    storageMeterText: (usedKB, capKB) => `${usedKB} / ${capKB} KB`,
-    storageBannerLimit: "Couldn't save: the room hit its shared storage limit (16 KB across all extensions). Open the console (F12) to see which extension is using the most space.",
-    storageBannerGeneric: "Couldn't save your last change. Check your connection and try again.",
+    settingsStorageLabel: "Storage used on this device",
+    storageMeterText: (usedKB) => `${usedKB} KB`,
+    storageBannerGeneric: "Couldn't save your last change. If you're in a private window or have browser storage blocked, try allowing it for this page.",
     accentAutoTitle: "Auto (follow Owlbear)",
     exportTitle: "Export note",
     exportAria: "Export ",
     settingsBackupLabel: "Notes backup",
-    backupHint: "Export notes to a file to free up space without losing them, and import them back whenever you want.",
+    backupHint: "Notes are stored on this device, not in the room. Export them to a file to take them to another device or as a backup, and import them back whenever you want.",
     exportAllBtn: "Export all",
     importBtn: "Import",
     importNoneFound: "No valid notes were found in the chosen file(s).",
     importSuccess: (n) => n === 1 ? "Imported 1 note." : `Imported ${n} notes.`,
+    clearAllBtn: "Clear all notes",
+    clearAllConfirm: (n) => `Delete the ${n} note(s) stored on this device for this room? This can't be undone — export them first if you want to keep them.`,
     toolbar: {
       bold: "Bold (Ctrl+B)", italic: "Italic (Ctrl+I)", underline: "Underline (Ctrl+U)", strike: "Strikethrough",
       pill: "Color pill", pillNone: "Remove color", textColor: "Text color", textColorNone: "Default color",

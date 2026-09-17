@@ -24,22 +24,21 @@ https://notes.ijpedraza.com/manifest.json
   instead of landing as literal symbols.
 - **Export/import**: back up a note (or all of them) to a file — a single
   `.json`, or a `.zip` with one file per note when exporting several at
-  once — and bring them back later. Also the way to free up room storage
-  without losing anything, see below.
+  once — and bring them back later, or move them to another device.
 - Personal accent color and language (English/Spanish) per player.
 
 ![Switching between notes, with search](docs/screenshot-notes.png)
 
-## Room storage
+## Where notes are stored
 
-Owlbear caps a room's shared storage, split across every
-extension in the room — not just this one. Notes are compressed before
-being stored, and a meter in Settings shows how much of that budget is in
-use. If you're getting close to the limit, export a note you don't need
-active (Settings has an "export all" option too) and delete it from the
-room — you can always import it back later without losing anything.
+Notes are stored locally on your device (in the browser's own storage),
+scoped to the room — not in Owlbear's shared room data, so GM Notes never
+competes with other extensions for space. The trade-off: a note only shows
+up on the device it was written on. To bring your notes to another device,
+export them (Settings has an "export all" option) and import the file
+there — or export as a backup any time you like.
 
-![Settings and storage meter](docs/screenshot-settings.png)
+![Settings, backup, and storage stats](docs/screenshot-settings.png)
 
 ## Support
 

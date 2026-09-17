@@ -3,8 +3,8 @@ import JSZip from "jszip";
 import "./style.css";
 import { getStrings } from "./i18n";
 import type { Language, Strings, ToolbarStrings } from "./i18n";
-import { getNotes, setNotes, onNotesChange, notesStorageStats, sanitizeNote, ROOM_METADATA_CAP_BYTES, StorageLimitError } from "./notes";
-import type { Note, MetadataKeySize } from "./notes";
+import { getNotes, setNotes, clearAllNotes, notesStorageBytes, sanitizeNote } from "./notes";
+import type { Note } from "./notes";
 import { getLanguage, setLanguage, getAccentPref, setAccentPref } from "./prefs";
 import type { AccentPref } from "./prefs";
 import { ACCENTS, ACCENT_ORDER, watchTheme } from "./theme";
@@ -46,30 +46,16 @@ async function persist(): Promise<boolean> {
     updateStorageMeter();
     return true;
   } catch (err) {
-    // room.setMetadata() rejecting was previously silent (callers use `void persist()`), which is
-    // exactly what "my notes vanish on refresh" looks like from the outside: the edit never actually
-    // reached room metadata, so the next getNotes() naturally reads back the last state that DID save.
-    console.error("Notes: failed to save to room metadata", err);
-    if (err instanceof StorageLimitError) {
-      showStorageBanner(strings().storageBannerLimit);
-      logMetadataBreakdown(err.breakdown);
-    } else {
-      showStorageBanner(strings().storageBannerGeneric);
-    }
+    // setNotes() rejecting was previously silent (callers use `void persist()`), which is exactly
+    // what "my notes vanish on refresh" looks like from the outside: the edit never actually reached
+    // storage, so the next getNotes() naturally reads back the last state that DID save. IndexedDB
+    // has no meaningful capacity limit to pre-flight against (unlike the old room-metadata 16kB
+    // cap), so a failure here is something environmental — private browsing blocking storage, quota
+    // exhausted at the OS/disk level — not something to predict, just report.
+    console.error("Notes: failed to save notes", err);
+    showStorageBanner(strings().storageBannerGeneric);
     return false;
   }
-}
-
-// Every extension's room metadata shares the SAME 16kB budget and the SAME object, under its own
-// namespaced key — this shows which extension is actually eating the room's shared space. GM-only
-// diagnostic, console-only by design: it surfaces other extensions' key names, which isn't something
-// to put in front-and-center UI, but is exactly what's needed to know what to disable/trim.
-function logMetadataBreakdown(breakdown: MetadataKeySize[]) {
-  const total = breakdown.reduce((sum, e) => sum + e.bytes, 0);
-  console.warn(
-    `Notes: room metadata is at its 16kB shared cap (~${(total / 1024).toFixed(1)}KB across ${breakdown.length} key(s)). Breakdown by key (this includes every extension's data, not just Notes):`
-  );
-  console.table(breakdown.map((e) => ({ key: e.key, KB: (e.bytes / 1024).toFixed(2) })));
 }
 
 function showStorageBanner(message: string) {
@@ -83,17 +69,10 @@ function hideStorageBanner() {
 }
 
 function updateStorageMeter() {
-  const fill = document.getElementById("storageMeterFill");
   const text = document.getElementById("storageMeterText");
-  if (!fill || !text) return;
-  const { stored } = notesStorageStats(notes);
-  const capKB = Math.round(ROOM_METADATA_CAP_BYTES / 1024);
-  const usedKB = (stored / 1024).toFixed(1);
-  const pct = Math.min(100, (stored / ROOM_METADATA_CAP_BYTES) * 100);
-  fill.style.width = pct + "%";
-  fill.classList.toggle("is-warn", pct >= 60 && pct < 85);
-  fill.classList.toggle("is-danger", pct >= 85);
-  text.textContent = strings().storageMeterText(usedKB, capKB);
+  if (!text) return;
+  const usedKB = (notesStorageBytes(notes) / 1024).toFixed(1);
+  text.textContent = strings().storageMeterText(usedKB);
 }
 
 const PILL_COLORS = [
@@ -524,6 +503,21 @@ async function importNotesFromFiles(files: FileList) {
   renderEditor();
   updateStorageMeter();
   window.alert(strings().importSuccess(imported.length));
+}
+
+// A full, explicit reset for this room's local storage — distinct from deleting notes one at a time,
+// and from the migration step in notes.ts that already clears the OLD shared room-metadata entry on
+// its own. This clears what's stored HERE, now, for whoever's using it; pairs naturally with "export
+// all" as a manual backup-then-wipe flow.
+async function clearAllNotesWithConfirm() {
+  if (!notes.length) return;
+  if (!window.confirm(strings().clearAllConfirm(notes.length))) return;
+  await clearAllNotes();
+  notes = [];
+  activeId = null;
+  renderList();
+  renderEditor();
+  updateStorageMeter();
 }
 
 // ---------- toolbar ----------
@@ -1586,6 +1580,7 @@ document.getElementById("importFileInput")!.addEventListener("change", (ev) => {
   if (input.files && input.files.length) void importNotesFromFiles(input.files);
   input.value = "";
 });
+document.getElementById("clearAllBtn")!.addEventListener("click", () => void clearAllNotesWithConfirm());
 
 document.getElementById("settingsLangRow")!.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest("button[data-lang]") as HTMLElement | null;
@@ -1622,6 +1617,7 @@ function applyLanguage() {
   document.getElementById("backupHint")!.textContent = s.backupHint;
   document.getElementById("exportAllBtn")!.textContent = s.exportAllBtn;
   document.getElementById("importBtn")!.textContent = s.importBtn;
+  document.getElementById("clearAllBtn")!.textContent = s.clearAllBtn;
   document.querySelectorAll("#settingsLangRow .opt-btn").forEach((b) => {
     b.classList.toggle("is-active", (b as HTMLElement).dataset.lang === language);
   });
@@ -1730,18 +1726,6 @@ function applyRoleView() {
 }
 
 // ---------- reacting to remote room-metadata changes (the GM editing from another device/tab) ----------
-function syncFromRemote(updated: Note[]) {
-  notes = updated;
-  renderList();
-  if (!settingsOverlay.hidden) updateStorageMeter();
-
-  const gmNeedsRebuild = (activeId && !notes.some((n) => n.id === activeId)) || (!activeId && notes.length > 0);
-  if (gmNeedsRebuild) {
-    activeId = notes.length ? notes[0].id : null;
-    renderEditor();
-  }
-}
-
 // ---------- boot ----------
 async function boot() {
   const [initialNotes, initialLanguage, initialAccent, initialRole] = await Promise.all([
@@ -1761,7 +1745,6 @@ async function boot() {
   applyLanguage();
   applyRoleView();
 
-  onNotesChange(syncFromRemote);
   OBR.player.onChange((player) => {
     if (player.role !== role) {
       role = player.role;

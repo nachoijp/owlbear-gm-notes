@@ -62,11 +62,8 @@
             </div>
             <div class="settings-modal-body">
               <div class="settings-section">
-                <span class="settings-section-label" id="settingsStorageLabel">Room storage used</span>
-                <div class="storage-meter">
-                  <div class="storage-meter-track"><div class="storage-meter-fill" id="storageMeterFill"></div></div>
-                  <span class="storage-meter-text" id="storageMeterText"></span>
-                </div>
+                <span class="settings-section-label" id="settingsStorageLabel">Storage used</span>
+                <span class="storage-meter-text" id="storageMeterText"></span>
               </div>
               <div class="settings-section">
                 <span class="settings-section-label" id="settingsBackupLabel">Notes backup</span>
@@ -75,6 +72,9 @@
                   <button type="button" class="opt-btn" id="exportAllBtn">Export all</button>
                   <button type="button" class="opt-btn" id="importBtn">Import</button>
                   <input type="file" id="importFileInput" accept=".json,.zip" multiple hidden />
+                </div>
+                <div class="backup-row">
+                  <button type="button" class="opt-btn danger" id="clearAllBtn">Clear all notes</button>
                 </div>
               </div>
               <div class="settings-section">

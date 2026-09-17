@@ -28,16 +28,15 @@ visibility toggle, nothing for them to see or edit.
 
 ![Switching between notes, with search](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-notes.png)
 
-## Export, import, and room storage
+## Where notes are stored
 
-Owlbear caps a room's total shared metadata at 16 KB, split across every
-extension in the room. GM Notes compresses notes before storing them and
-shows a live storage meter in Settings. Any note can be exported to a file
-(or all of them at once, as a zip) and imported back later — a way to
-archive notes you don't need active without losing them, and free up room
-storage in the process.
+Notes are stored locally on your device, scoped to the room — not in
+Owlbear's shared room data, so GM Notes never competes with other
+extensions for space. Any note can be exported to a file (or all of them
+at once, as a zip) and imported back — a way to move notes to another
+device, or just keep a backup.
 
-![Settings and storage meter](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-settings.png)
+![Settings, backup, and storage stats](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-settings.png)
 
 ## Support
 
