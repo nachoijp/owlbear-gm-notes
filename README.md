@@ -1,9 +1,7 @@
 # GM Notes
 
 An [Owlbear Rodeo](https://www.owlbear.rodeo/) extension for a private,
-rich-text campaign journal — visible only to the GM. Players who open it see
-a simple access-restricted screen; there's no sharing, no per-note
-visibility toggle, nothing for them to see or edit.
+rich-text campaign journal — visible only to the GM.
 
 ![GM Notes](docs/header.png)
 
@@ -34,7 +32,7 @@ https://notes.ijpedraza.com/manifest.json
 
 ## Room storage
 
-Owlbear caps a room's total shared metadata at 16 KB, split across every
+Owlbear caps a room's shared storage, split across every
 extension in the room — not just this one. Notes are compressed before
 being stored, and a meter in Settings shows how much of that budget is in
 use. If you're getting close to the limit, export a note you don't need
