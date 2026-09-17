@@ -26,7 +26,7 @@ visibility toggle, nothing for them to see or edit.
    dividers) is recognized automatically and converted to real formatting.
 3. Switch between notes and search them from the dropdown at the top.
 
-![The note editor](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-editor.png)
+![Switching between notes, with search](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-notes.png)
 
 ## Export, import, and room storage
 

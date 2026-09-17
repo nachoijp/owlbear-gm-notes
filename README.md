@@ -30,7 +30,7 @@ https://notes.ijpedraza.com/manifest.json
   without losing anything, see below.
 - Personal accent color and language (English/Spanish) per player.
 
-![The note editor](docs/screenshot-editor.png)
+![Switching between notes, with search](docs/screenshot-notes.png)
 
 ## Room storage
 
