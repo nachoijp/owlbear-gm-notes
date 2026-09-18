@@ -205,6 +205,84 @@ function markdownToHtml(text: string): string {
   closeList();
   return out.join("");
 }
+
+// The reverse of markdownToHtml() above, used for the Markdown export option. Formatting with no
+// standard Markdown equivalent — pills, text color, underline — has no representation to fall back
+// to (Markdown itself has no concept of color), so it's dropped, keeping just the plain text; this is
+// a one-way, human-readable export for taking a note elsewhere, not a lossless round-trip format —
+// the JSON export exists for that. Escapes literal backslash/backtick/asterisk/underscore in plain
+// text so the user's own characters don't get misread as Markdown syntax by whatever reads the file.
+function htmlToMarkdown(html: string): string {
+  const container = document.createElement("div");
+  container.innerHTML = html;
+
+  function escapeText(s: string): string {
+    return (s || "").replace(/[\\`*_]/g, "\\$&");
+  }
+  function inline(node: Node): string {
+    if (node.nodeType === 3) return escapeText(node.textContent || "");
+    if (node.nodeType !== 1) return "";
+    const el = node as HTMLElement;
+    const inner = Array.prototype.map.call(el.childNodes, inline).join("");
+    switch (el.tagName) {
+      case "B":
+      case "STRONG":
+        return `**${inner}**`;
+      case "I":
+      case "EM":
+        return `*${inner}*`;
+      case "S":
+      case "STRIKE":
+      case "DEL":
+        return `~~${inner}~~`;
+      case "BR":
+        return "  \n";
+      default:
+        return inner;
+    }
+  }
+  // Sub-lists in this editor sit as a SIBLING of the <li> they nest under, inside the same parent
+  // <ul>/<ol> (see stripAllListsAtSelection's own comment on this) — walking list.children in order
+  // and bumping the indent level whenever a UL/OL turns up between <li>s reproduces that nesting
+  // correctly in the output without needing to know about the quirk explicitly.
+  function list(el: HTMLElement, depth: number): string {
+    const ordered = el.tagName === "OL";
+    const indent = "  ".repeat(depth);
+    const lines: string[] = [];
+    let n = 1;
+    Array.prototype.forEach.call(el.children, (child: HTMLElement) => {
+      if (child.tagName === "LI") {
+        lines.push(`${indent}${ordered ? `${n++}. ` : "- "}${inline(child)}`);
+      } else if (child.tagName === "UL" || child.tagName === "OL") {
+        lines.push(list(child, depth + 1));
+      }
+    });
+    return lines.join("\n");
+  }
+  function block(el: HTMLElement): string {
+    switch (el.tagName) {
+      case "H1":
+        return `# ${inline(el)}`;
+      case "H2":
+        return `## ${inline(el)}`;
+      case "BLOCKQUOTE":
+        return inline(el)
+          .split("\n")
+          .map((l) => `> ${l}`)
+          .join("\n");
+      case "HR":
+        return "---";
+      case "UL":
+      case "OL":
+        return list(el, 0);
+      default:
+        return inline(el);
+    }
+  }
+
+  return Array.prototype.map.call(container.children, block).join("\n\n");
+}
+
 function stripHtml(html: string): string {
   const tmp = document.createElement("div");
   tmp.innerHTML = html;
@@ -277,7 +355,7 @@ function renderList() {
       exportBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v7m0 0L5 6m3 3 3-3M3 12.5h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
       exportBtn.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        exportNote(n);
+        openExportFormatModal(n);
       });
 
       const editBtn = document.createElement("button");
@@ -416,29 +494,57 @@ function safeFileName(title: string): string {
   return cleaned || strings().untitled;
 }
 
-function exportNote(note: Note) {
-  const blob = new Blob([JSON.stringify(noteToExportPayload(note), null, 2)], { type: "application/json" });
-  downloadBlob(blob, safeFileName(note.title) + ".json");
+type ExportFormat = "json" | "markdown";
+
+function exportNote(note: Note, format: ExportFormat) {
+  if (format === "json") {
+    const blob = new Blob([JSON.stringify(noteToExportPayload(note), null, 2)], { type: "application/json" });
+    downloadBlob(blob, safeFileName(note.title) + ".json");
+  } else {
+    const blob = new Blob([htmlToMarkdown(note.html)], { type: "text/markdown" });
+    downloadBlob(blob, safeFileName(note.title) + ".md");
+  }
 }
 
-async function exportAllNotes() {
+async function exportAllNotes(format: ExportFormat) {
   if (!notes.length) return;
   if (notes.length === 1) {
-    exportNote(notes[0]);
+    exportNote(notes[0], format);
     return;
   }
   const zip = new JSZip();
   const usedNames = new Set<string>();
+  const ext = format === "json" ? ".json" : ".md";
   notes.forEach((n) => {
     const base = safeFileName(n.title);
     let name = base;
     let i = 2;
     while (usedNames.has(name)) name = `${base}-${i++}`;
     usedNames.add(name);
-    zip.file(name + ".json", JSON.stringify(noteToExportPayload(n), null, 2));
+    const content = format === "json" ? JSON.stringify(noteToExportPayload(n), null, 2) : htmlToMarkdown(n.html);
+    zip.file(name + ext, content);
   });
   const blob = await zip.generateAsync({ type: "blob" });
   downloadBlob(blob, "gm-notes-export.zip");
+}
+
+// Which export was requested (a single note, or "all") while the format-choice modal is open — set
+// when the modal opens, read and cleared the moment a format button is clicked.
+let pendingExportTarget: Note | "all" | null = null;
+function openExportFormatModal(target: Note | "all") {
+  pendingExportTarget = target;
+  (document.getElementById("exportFormatOverlay") as HTMLElement).hidden = false;
+}
+function closeExportFormatModal() {
+  pendingExportTarget = null;
+  (document.getElementById("exportFormatOverlay") as HTMLElement).hidden = true;
+}
+function chooseExportFormat(format: ExportFormat) {
+  const target = pendingExportTarget;
+  closeExportFormatModal();
+  if (!target) return;
+  if (target === "all") void exportAllNotes(format);
+  else exportNote(target, format);
 }
 
 // Accepts anything sanitizeNote() would accept from room metadata (so a hand-edited or older-format
@@ -454,16 +560,32 @@ function parseImportedNote(json: string): Note | null {
   return sanitized ? { ...sanitized, id: freshNoteId() } : null;
 }
 
+// A Markdown file carries no title/id of its own — the filename (minus extension) becomes the title,
+// and its text runs through the SAME parser the paste handler uses, so a note round-tripped out as
+// Markdown and back in comes back as real formatting, not literal "**"/"#"/"-" markers.
+function noteFromMarkdownFile(filename: string, text: string): Note {
+  const title = filename.replace(/\.md$/i, "").trim();
+  return { id: freshNoteId(), title: title || strings().untitled, html: markdownToHtml(text), updatedAt: Date.now() };
+}
+
 async function notesFromImportFile(file: File): Promise<Note[]> {
   if (/\.zip$/i.test(file.name)) {
     const zip = await JSZip.loadAsync(file);
     const results: Note[] = [];
     for (const entry of Object.values(zip.files)) {
-      if (entry.dir || !/\.json$/i.test(entry.name)) continue;
-      const parsed = parseImportedNote(await entry.async("text"));
-      if (parsed) results.push(parsed);
+      if (entry.dir) continue;
+      const entryName = entry.name.split("/").pop() || entry.name;
+      if (/\.json$/i.test(entryName)) {
+        const parsed = parseImportedNote(await entry.async("text"));
+        if (parsed) results.push(parsed);
+      } else if (/\.md$/i.test(entryName)) {
+        results.push(noteFromMarkdownFile(entryName, await entry.async("text")));
+      }
     }
     return results;
+  }
+  if (/\.md$/i.test(file.name)) {
+    return [noteFromMarkdownFile(file.name, await file.text())];
   }
   const parsed = parseImportedNote(await file.text());
   return parsed ? [parsed] : [];
@@ -1567,11 +1689,20 @@ function closeSettings() {
 document.getElementById("settingsBtn")!.addEventListener("click", openSettings);
 document.getElementById("settingsBackdrop")!.addEventListener("click", closeSettings);
 document.getElementById("settingsCloseBtn")!.addEventListener("click", closeSettings);
+
+const exportFormatOverlay = document.getElementById("exportFormatOverlay") as HTMLElement;
+document.getElementById("exportFormatBackdrop")!.addEventListener("click", closeExportFormatModal);
+document.getElementById("exportFormatCloseBtn")!.addEventListener("click", closeExportFormatModal);
+document.getElementById("exportFormatJsonBtn")!.addEventListener("click", () => chooseExportFormat("json"));
+document.getElementById("exportFormatMdBtn")!.addEventListener("click", () => chooseExportFormat("markdown"));
+
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && !settingsOverlay.hidden) closeSettings();
+  if (ev.key !== "Escape") return;
+  if (!exportFormatOverlay.hidden) closeExportFormatModal();
+  else if (!settingsOverlay.hidden) closeSettings();
 });
 
-document.getElementById("exportAllBtn")!.addEventListener("click", () => void exportAllNotes());
+document.getElementById("exportAllBtn")!.addEventListener("click", () => openExportFormatModal("all"));
 document.getElementById("importBtn")!.addEventListener("click", () => {
   (document.getElementById("importFileInput") as HTMLInputElement).click();
 });
@@ -1618,6 +1749,13 @@ function applyLanguage() {
   document.getElementById("exportAllBtn")!.textContent = s.exportAllBtn;
   document.getElementById("importBtn")!.textContent = s.importBtn;
   document.getElementById("clearAllBtn")!.textContent = s.clearAllBtn;
+  document.getElementById("exportFormatTitle")!.textContent = s.exportFormatTitle;
+  document.getElementById("exportFormatHint")!.textContent = s.exportFormatHint;
+  document.getElementById("exportFormatJsonBtn")!.textContent = s.exportFormatJsonBtn;
+  document.getElementById("exportFormatMdBtn")!.textContent = s.exportFormatMdBtn;
+  const exportFormatCloseBtn = document.getElementById("exportFormatCloseBtn")!;
+  exportFormatCloseBtn.title = s.settingsClose;
+  exportFormatCloseBtn.setAttribute("aria-label", s.settingsClose);
   document.querySelectorAll("#settingsLangRow .opt-btn").forEach((b) => {
     b.classList.toggle("is-active", (b as HTMLElement).dataset.lang === language);
   });

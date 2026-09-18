@@ -19,24 +19,23 @@ https://notes.ijpedraza.com/manifest.json
   text color, colored blockquotes, dividers, and bulleted/numbered lists
   (with indent for sub-lists).
 - Multiple notes per room, with search and a quick switcher.
-- **Paste recognizes Markdown** — headings, `**bold**`/`*italic*`, lists,
-  `> quotes`, and `---` dividers all convert straight into real formatting
-  instead of landing as literal symbols.
-- **Export/import**: back up a note (or all of them) to a file — a single
-  `.json`, or a `.zip` with one file per note when exporting several at
-  once — and bring them back later, or move them to another device.
+- **Paste from anywhere**: pasted text keeps its Markdown formatting —
+  headings, `**bold**`/`*italic*`, lists, `> quotes`, and `---` dividers all
+  show up styled instead of as raw symbols.
+- **Export and import**: save a note (or all of them at once) as a file, and
+  bring it back whenever you want. Choose JSON to keep everything exactly
+  as it was, or Markdown for a plain-text copy you can read or edit
+  anywhere else.
 - Personal accent color and language (English/Spanish) per player.
 
 ![Switching between notes, with search](docs/screenshot-notes.png)
 
-## Where notes are stored
+## Notes live on your device
 
-Notes are stored locally on your device (in the browser's own storage),
-scoped to the room — not in Owlbear's shared room data, so GM Notes never
-competes with other extensions for space. The trade-off: a note only shows
-up on the device it was written on. To bring your notes to another device,
-export them (Settings has an "export all" option) and import the file
-there — or export as a backup any time you like.
+Each note stays on the device you wrote it on — it won't automatically
+follow you to another computer or browser. To bring a note somewhere else,
+or just keep a backup, export it (or all your notes at once, from
+Settings) and import the file wherever you need it.
 
 ![Settings, backup, and storage stats](docs/screenshot-settings.png)
 

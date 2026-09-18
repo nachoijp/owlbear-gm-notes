@@ -66,6 +66,10 @@ export interface Strings {
   importSuccess: (n: number) => string;
   clearAllBtn: string;
   clearAllConfirm: (n: number) => string;
+  exportFormatTitle: string;
+  exportFormatHint: string;
+  exportFormatJsonBtn: string;
+  exportFormatMdBtn: string;
   toolbar: ToolbarStrings;
 }
 
@@ -115,6 +119,10 @@ const STRINGS: Record<Language, Strings> = {
     importSuccess: (n) => n === 1 ? "Se importó 1 nota." : `Se importaron ${n} notas.`,
     clearAllBtn: "Borrar todas las notas",
     clearAllConfirm: (n) => `¿Borrar las ${n} nota(s) guardadas en este dispositivo para esta sala? Esta acción no se puede deshacer — exportalas antes si querés conservarlas.`,
+    exportFormatTitle: "Formato de exportación",
+    exportFormatHint: "Markdown es texto plano y legible — bueno para llevar una nota a otro lado. JSON conserva todo tal cual y es lo que espera Importar.",
+    exportFormatJsonBtn: "JSON",
+    exportFormatMdBtn: "Markdown",
     toolbar: {
       bold: "Negrita (Ctrl+B)", italic: "Cursiva (Ctrl+I)", underline: "Subrayado (Ctrl+U)", strike: "Tachado",
       pill: "Píldora de color", pillNone: "Quitar color", textColor: "Color de texto", textColorNone: "Color por defecto",
@@ -168,6 +176,10 @@ const STRINGS: Record<Language, Strings> = {
     importSuccess: (n) => n === 1 ? "Imported 1 note." : `Imported ${n} notes.`,
     clearAllBtn: "Clear all notes",
     clearAllConfirm: (n) => `Delete the ${n} note(s) stored on this device for this room? This can't be undone — export them first if you want to keep them.`,
+    exportFormatTitle: "Export format",
+    exportFormatHint: "Markdown is plain, readable text — good for taking a note elsewhere. JSON keeps everything exactly as-is and is what Import expects back.",
+    exportFormatJsonBtn: "JSON",
+    exportFormatMdBtn: "Markdown",
     toolbar: {
       bold: "Bold (Ctrl+B)", italic: "Italic (Ctrl+I)", underline: "Underline (Ctrl+U)", strike: "Strikethrough",
       pill: "Color pill", pillNone: "Remove color", textColor: "Text color", textColorNone: "Default color",

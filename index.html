@@ -71,7 +71,7 @@
                 <div class="backup-row">
                   <button type="button" class="opt-btn" id="exportAllBtn">Export all</button>
                   <button type="button" class="opt-btn" id="importBtn">Import</button>
-                  <input type="file" id="importFileInput" accept=".json,.zip" multiple hidden />
+                  <input type="file" id="importFileInput" accept=".json,.zip,.md" multiple hidden />
                 </div>
                 <div class="backup-row">
                   <button type="button" class="opt-btn danger" id="clearAllBtn">Clear all notes</button>
@@ -86,6 +86,27 @@
                 <div class="settings-lang-row" id="settingsLangRow">
                   <button type="button" class="opt-btn" data-lang="es">Español</button>
                   <button type="button" class="opt-btn" data-lang="en">English</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-overlay" id="exportFormatOverlay" hidden>
+          <div class="settings-backdrop" id="exportFormatBackdrop"></div>
+          <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="exportFormatTitle">
+            <div class="settings-modal-head">
+              <span id="exportFormatTitle">Export format</span>
+              <button type="button" class="settings-close-btn" id="exportFormatCloseBtn" title="Close" aria-label="Close">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              </button>
+            </div>
+            <div class="settings-modal-body">
+              <div class="settings-section">
+                <p class="cleanup-hint" id="exportFormatHint">Markdown is plain, readable text — good for taking a note elsewhere. JSON keeps everything exactly as-is and is what Import expects back.</p>
+                <div class="backup-row">
+                  <button type="button" class="opt-btn" id="exportFormatJsonBtn">JSON</button>
+                  <button type="button" class="opt-btn" id="exportFormatMdBtn">Markdown</button>
                 </div>
               </div>
             </div>
