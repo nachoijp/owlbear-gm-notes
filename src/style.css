@@ -244,8 +244,19 @@ body{
 .save-state{ display:flex; align-items:center; gap:6px; }
 .save-state .pip{ width:6px; height:6px; border-radius:50%; background:#5fbf7a; transition:background .15s ease; }
 .save-state .pip.pending{ background:var(--text-disabled); }
+.cloud-sync-btn{
+  flex:0 0 auto; width:16px; height:16px; padding:0; margin-left:1px; border:0; background:transparent;
+  color:var(--text-disabled); display:flex; align-items:center; justify-content:center; cursor:pointer; border-radius:4px;
+}
+.cloud-sync-btn:hover{ background:color-mix(in srgb, var(--primary-main) 16%, transparent); }
+.cloud-sync-btn.state-signed-out{ color:color-mix(in srgb, var(--text-disabled) 60%, transparent); cursor:pointer; }
+.cloud-sync-btn.state-synced{ color:#5fbf7a; }
+.cloud-sync-btn.state-pending{ color:var(--text-disabled); }
+.cloud-sync-btn.state-syncing{ color:var(--primary-light); animation:cloud-sync-pulse 1s ease-in-out infinite; }
+.cloud-sync-btn.state-error{ color:#e0524f; }
+@keyframes cloud-sync-pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.4; } }
 
-/* ---- storage-limit banner: shown when a save is rejected for exceeding Owlbear's 16kB room-metadata cap ---- */
+/* ---- storage banner: shown when a save fails (e.g. local storage blocked or unavailable) ---- */
 .storage-banner{
   flex:0 0 auto; display:flex; align-items:flex-start; gap:8px; padding:8px 12px;
   background:color-mix(in srgb, #e0524f 16%, var(--bg-solid)); border-bottom:1px solid color-mix(in srgb, #e0524f 40%, transparent);
@@ -311,8 +322,9 @@ body{
 }
 .accent-swatch-auto svg{ width:12px; height:12px; filter:drop-shadow(0 0 1px rgba(0,0,0,.65)); }
 .settings-lang-row{ display:flex; gap:6px; }
-.backup-row{ display:flex; gap:6px; }
+.backup-row{ display:flex; gap:6px; align-items:center; }
 .backup-row + .backup-row{ margin-top:6px; }
+.cloud-account-email{ font-size:11.5px; color:var(--text-secondary); font-family:var(--font-mono); }
 .opt-btn{
   font-family:var(--font-ui); font-size:12px; font-weight:600; color:var(--text-secondary);
   background:transparent; border:1px solid var(--divider); border-radius:7px;

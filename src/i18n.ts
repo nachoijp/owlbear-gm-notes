@@ -70,6 +70,14 @@ export interface Strings {
   exportFormatHint: string;
   exportFormatJsonBtn: string;
   exportFormatMdBtn: string;
+  settingsCloudLabel: string;
+  cloudSyncHint: string;
+  cloudSignInBtn: string;
+  cloudSignOutBtn: string;
+  cloudSyncNowBtn: string;
+  cloudSignInError: string;
+  cloudSignedOutTitle: string;
+  cloudStatusTitle: (status: string) => string;
   toolbar: ToolbarStrings;
 }
 
@@ -123,6 +131,19 @@ const STRINGS: Record<Language, Strings> = {
     exportFormatHint: "Markdown es texto plano y legible — bueno para llevar una nota a otro lado. JSON conserva todo tal cual y es lo que espera Importar.",
     exportFormatJsonBtn: "JSON",
     exportFormatMdBtn: "Markdown",
+    settingsCloudLabel: "Sincronización en la nube",
+    cloudSyncHint: "Iniciá sesión con Google para sincronizar tus notas con tu propia cuenta, así te siguen a otro dispositivo. Solo vos podés verlas — iniciar sesión no comparte nada con jugadores ni otros GMs.",
+    cloudSignInBtn: "Iniciar sesión con Google",
+    cloudSignOutBtn: "Cerrar sesión",
+    cloudSyncNowBtn: "Sincronizar ahora",
+    cloudSignInError: "No se pudo iniciar sesión. Probá de nuevo.",
+    cloudSignedOutTitle: "Sin sincronizar — iniciá sesión en Configuración",
+    cloudStatusTitle: (status) => ({
+      synced: "Sincronizado con la nube",
+      pending: "Cambios pendientes de sincronizar — clic para sincronizar ahora",
+      syncing: "Sincronizando…",
+      error: "Error al sincronizar — clic para reintentar",
+    })[status] || "Sincronización en la nube",
     toolbar: {
       bold: "Negrita (Ctrl+B)", italic: "Cursiva (Ctrl+I)", underline: "Subrayado (Ctrl+U)", strike: "Tachado",
       pill: "Píldora de color", pillNone: "Quitar color", textColor: "Color de texto", textColorNone: "Color por defecto",
@@ -180,6 +201,19 @@ const STRINGS: Record<Language, Strings> = {
     exportFormatHint: "Markdown is plain, readable text — good for taking a note elsewhere. JSON keeps everything exactly as-is and is what Import expects back.",
     exportFormatJsonBtn: "JSON",
     exportFormatMdBtn: "Markdown",
+    settingsCloudLabel: "Cloud sync",
+    cloudSyncHint: "Sign in with Google to sync your notes to your own account, so they follow you to another device. Only you can see them — signing in does not share anything with players or other GMs.",
+    cloudSignInBtn: "Sign in with Google",
+    cloudSignOutBtn: "Sign out",
+    cloudSyncNowBtn: "Sync now",
+    cloudSignInError: "Couldn't sign in. Please try again.",
+    cloudSignedOutTitle: "Not syncing — sign in from Settings",
+    cloudStatusTitle: (status) => ({
+      synced: "Synced with the cloud",
+      pending: "Changes waiting to sync — click to sync now",
+      syncing: "Syncing…",
+      error: "Sync failed — click to retry",
+    })[status] || "Cloud sync",
     toolbar: {
       bold: "Bold (Ctrl+B)", italic: "Italic (Ctrl+I)", underline: "Underline (Ctrl+U)", strike: "Strikethrough",
       pill: "Color pill", pillNone: "Remove color", textColor: "Text color", textColorNone: "Default color",

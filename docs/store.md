@@ -28,13 +28,17 @@ visibility toggle, nothing for them to see or edit.
 
 ![Switching between notes, with search](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-notes.png)
 
-## Notes live on your device
+## Notes live on your device — with optional cloud sync
 
 Each note stays on the device you wrote it on. To bring a note somewhere
 else, or just keep a backup, export it — one note or all of them at once —
 as JSON (keeps everything exactly as it was) or Markdown (a plain-text
 copy you can read or edit anywhere), and import the file back whenever
 you want.
+
+Want your notes on more than one device automatically? Sign in with
+Google from Settings — that's the only setup needed. It's entirely
+optional, and only you can see your own notes.
 
 ![Settings, backup, and storage stats](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-settings.png)
 

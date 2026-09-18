@@ -30,12 +30,17 @@ https://notes.ijpedraza.com/manifest.json
 
 ![Switching between notes, with search](docs/screenshot-notes.png)
 
-## Notes live on your device
+## Notes live on your device — with optional cloud sync
 
-Each note stays on the device you wrote it on — it won't automatically
-follow you to another computer or browser. To bring a note somewhere else,
-or just keep a backup, export it (or all your notes at once, from
-Settings) and import the file wherever you need it.
+Each note is saved on the device you wrote it on. To bring a note
+somewhere else, or just keep a backup, export it (or all your notes at
+once, from Settings) and import the file wherever you need it.
+
+Want your notes on more than one device automatically? Sign in with
+Google from Settings and they'll sync in the background — no setup
+beyond that one sign-in. It's entirely optional and only you can see
+your own notes; signing in doesn't share anything with players or other
+GMs.
 
 ![Settings, backup, and storage stats](docs/screenshot-settings.png)
 

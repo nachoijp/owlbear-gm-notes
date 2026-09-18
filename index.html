@@ -65,6 +65,20 @@
                 <span class="settings-section-label" id="settingsStorageLabel">Storage used</span>
                 <span class="storage-meter-text" id="storageMeterText"></span>
               </div>
+              <div class="settings-section" id="cloudSyncSection" hidden>
+                <span class="settings-section-label" id="settingsCloudLabel">Cloud sync</span>
+                <p class="cleanup-hint" id="cloudSyncHint">Sign in with Google to sync your notes to your own account, so they follow you to another device. Only you can see them — signing in does not share anything with players or other GMs.</p>
+                <div class="backup-row" id="cloudSignedOutRow">
+                  <button type="button" class="opt-btn" id="cloudSignInBtn">Sign in with Google</button>
+                </div>
+                <div class="backup-row" id="cloudSignedInRow" hidden>
+                  <span class="cloud-account-email" id="cloudAccountEmail"></span>
+                </div>
+                <div class="backup-row" id="cloudSignedInActions" hidden>
+                  <button type="button" class="opt-btn" id="cloudSyncNowBtn">Sync now</button>
+                  <button type="button" class="opt-btn danger" id="cloudSignOutBtn">Sign out</button>
+                </div>
+              </div>
               <div class="settings-section">
                 <span class="settings-section-label" id="settingsBackupLabel">Notes backup</span>
                 <p class="cleanup-hint" id="backupHint">Export notes to a file to free up space without losing them, and import them back whenever you want.</p>

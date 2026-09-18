@@ -8,6 +8,21 @@ import type { Note } from "./notes";
 import { getLanguage, setLanguage, getAccentPref, setAccentPref } from "./prefs";
 import type { AccentPref } from "./prefs";
 import { ACCENTS, ACCENT_ORDER, watchTheme } from "./theme";
+import {
+  cloudSyncAvailable,
+  getCurrentUser,
+  onAuthChange,
+  signInWithGoogle,
+  signOutCloud,
+  getSyncStatus,
+  onSyncStatusChange,
+  initCloudSyncContext,
+  markNoteDirty,
+  deleteNoteFromCloud,
+  flushCloudSync,
+  watchCloudNotes,
+} from "./cloudSync";
+import type { User } from "firebase/auth";
 
 // ---------- state ----------
 let notes: Note[] = [];
@@ -19,9 +34,10 @@ let role: "GM" | "PLAYER" = "GM";
 let setThemeAccent: (accent: AccentPref) => void = () => {};
 
 // The debounced per-keystroke save (see scheduleSave in buildNoteEditor) waits 400ms of idle typing
-// before actually writing to room metadata — a refresh/tab-close inside that window would otherwise
+// before actually writing to local storage — a refresh/tab-close inside that window would otherwise
 // silently drop the last few keystrokes. Whichever editor instance currently has a save pending points
-// this at its own flush, and we force it immediately the moment the page might go away.
+// this at its own flush, and we force it immediately the moment the page might go away — same idea
+// for the cloud sync debounce (much longer, see cloudSync.ts), flushed alongside it here.
 let pendingSaveFlush: (() => void | Promise<void>) | null = null;
 function flushPendingSave() {
   if (pendingSaveFlush) {
@@ -29,6 +45,7 @@ function flushPendingSave() {
     pendingSaveFlush = null;
     flush();
   }
+  void flushCloudSync();
 }
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") flushPendingSave();
@@ -73,6 +90,45 @@ function updateStorageMeter() {
   if (!text) return;
   const usedKB = (notesStorageBytes(notes) / 1024).toFixed(1);
   text.textContent = strings().storageMeterText(usedKB);
+}
+
+// The little cloud icon next to the save indicator: hidden entirely unless a Firebase project is
+// configured (see firebaseConfig.ts) — cloud sync is opt-in infrastructure, not something to hint at
+// for anyone who hasn't set it up. Doubles as a manual "sync now" button once signed in; when signed
+// out, clicking it opens Settings instead, since that's where signing in actually happens.
+function updateSyncIndicator() {
+  const btn = document.getElementById("gmCloudSyncBtn") as HTMLButtonElement | null;
+  if (!btn || !cloudSyncAvailable()) {
+    if (btn) btn.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  const s = strings();
+  btn.classList.remove("state-signed-out", "state-synced", "state-pending", "state-syncing", "state-error");
+  const user = getCurrentUser();
+  if (!user) {
+    btn.classList.add("state-signed-out");
+    btn.title = s.cloudSignedOutTitle;
+    btn.setAttribute("aria-label", s.cloudSignedOutTitle);
+    return;
+  }
+  const status = getSyncStatus();
+  const shown = status === "off" ? "synced" : status;
+  btn.classList.add(`state-${shown}`);
+  btn.title = s.cloudStatusTitle(shown);
+  btn.setAttribute("aria-label", s.cloudStatusTitle(shown));
+}
+
+function updateCloudAccountUI(user: User | null) {
+  const signedOutRow = document.getElementById("cloudSignedOutRow");
+  const signedInRow = document.getElementById("cloudSignedInRow");
+  const signedInActions = document.getElementById("cloudSignedInActions");
+  const emailEl = document.getElementById("cloudAccountEmail");
+  if (!signedOutRow || !signedInRow || !signedInActions || !emailEl) return;
+  signedOutRow.hidden = !!user;
+  signedInRow.hidden = !user;
+  signedInActions.hidden = !user;
+  emailEl.textContent = user?.email || "";
 }
 
 const PILL_COLORS = [
@@ -418,6 +474,8 @@ function startRename(itemEl: HTMLElement, note: Note) {
   function commit() {
     const v = input.value.trim();
     note.title = v || strings().untitled;
+    note.updatedAt = Date.now();
+    markNoteDirty(note.id);
     void persist();
     renderList();
     renderEditor();
@@ -437,6 +495,7 @@ async function deleteNote(id: string) {
   if (activeId === id) {
     activeId = notes.length ? notes[0].id : null;
   }
+  void deleteNoteFromCloud(id);
   await persist();
   renderList();
   renderEditor();
@@ -446,6 +505,7 @@ async function createNote() {
   const note: Note = { id: "n" + Date.now(), title: strings().newNoteDefaultTitle, html: "", updatedAt: Date.now() };
   notes.unshift(note);
   activeId = note.id;
+  markNoteDirty(note.id);
   await persist();
   renderList();
   renderEditor();
@@ -610,10 +670,9 @@ async function importNotesFromFiles(files: FileList) {
   // somehow still the same note rather than an independent copy. Importing is its own edit event in
   // THIS room, right now, so it gets its own timestamp.
   const importedAt = Date.now();
-  imported.forEach((n) => { n.updatedAt = importedAt; });
-  // All-or-nothing: persist() already validates the merged size against the room's shared cap and
-  // surfaces the storage banner if it doesn't fit — rolling the in-memory array back on failure keeps
-  // it from silently showing notes the room never actually saved.
+  imported.forEach((n) => { n.updatedAt = importedAt; markNoteDirty(n.id); });
+  // All-or-nothing: rolling the in-memory array back if persist() fails keeps it from silently
+  // showing notes that never actually made it to storage.
   const before = notes;
   notes = [...imported, ...notes];
   const ok = await persist();
@@ -634,6 +693,7 @@ async function importNotesFromFiles(files: FileList) {
 async function clearAllNotesWithConfirm() {
   if (!notes.length) return;
   if (!window.confirm(strings().clearAllConfirm(notes.length))) return;
+  await Promise.all(notes.map((n) => deleteNoteFromCloud(n.id)));
   await clearAllNotes();
   notes = [];
   activeId = null;
@@ -738,7 +798,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     toolbarHtml +
     `<div class="title-row"><input class="note-title-input" id="${idPrefix}TitleInput" placeholder="${escapeHtml(s.titlePlaceholder)}" value="${escapeHtml(seed.title)}" /></div>` +
     `<div class="editor-scroll"><div class="editor-surface" id="${idPrefix}EditorSurface" contenteditable="true" data-placeholder="${escapeHtml(s.bodyPlaceholder)}"></div></div>` +
-    `<div class="editor-foot"><span class="save-state"><span class="pip" id="${idPrefix}SavePip"></span><span id="${idPrefix}SavedAgo">${escapeHtml(s.savedPrefix + s.savedInstant)}</span></span><span id="${idPrefix}WordCount">${escapeHtml(s.wordsCount(0))}</span></div>`;
+    `<div class="editor-foot"><span class="save-state"><span class="pip" id="${idPrefix}SavePip"></span><span id="${idPrefix}SavedAgo">${escapeHtml(s.savedPrefix + s.savedInstant)}</span><button type="button" class="cloud-sync-btn" id="${idPrefix}CloudSyncBtn" hidden><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M5.3 12.3h6.4a2.7 2.7 0 0 0 .35-5.37 3.75 3.75 0 0 0-7.3-1.1A2.6 2.6 0 0 0 5.3 12.3Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></button></span><span id="${idPrefix}WordCount">${escapeHtml(s.wordsCount(0))}</span></div>`;
 
   const surface = document.getElementById(idPrefix + "EditorSurface") as HTMLElement;
   // A brand-new note starts with html: "" — surface.innerHTML = "" leaves surface with no element
@@ -825,6 +885,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     const n = currentNote();
     if (!n) return;
     n.updatedAt = Date.now();
+    markNoteDirty(n.id);
     if (saveTimer) clearTimeout(saveTimer);
     setSaveIndicator(true);
     const fire = async () => {
@@ -844,6 +905,12 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     n.title = this.value;
     scheduleSave();
   });
+
+  document.getElementById(idPrefix + "CloudSyncBtn")!.addEventListener("click", () => {
+    if (getCurrentUser()) void flushCloudSync();
+    else openSettings();
+  });
+  updateSyncIndicator();
 
   document.getElementById(idPrefix + "Toolbar")!.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest("button[data-cmd]") as HTMLElement | null;
@@ -1681,6 +1748,11 @@ settingsAccentRow.addEventListener("click", (ev) => {
 function openSettings() {
   renderAccentOptions();
   updateStorageMeter();
+  const cloudSection = document.getElementById("cloudSyncSection");
+  if (cloudSection) {
+    cloudSection.hidden = !cloudSyncAvailable();
+    if (cloudSyncAvailable()) updateCloudAccountUI(getCurrentUser());
+  }
   settingsOverlay.hidden = false;
 }
 function closeSettings() {
@@ -1712,6 +1784,15 @@ document.getElementById("importFileInput")!.addEventListener("change", (ev) => {
   input.value = "";
 });
 document.getElementById("clearAllBtn")!.addEventListener("click", () => void clearAllNotesWithConfirm());
+
+document.getElementById("cloudSignInBtn")!.addEventListener("click", () => {
+  void signInWithGoogle().catch((err) => {
+    console.error("Notes: Google sign-in failed", err);
+    window.alert(strings().cloudSignInError);
+  });
+});
+document.getElementById("cloudSignOutBtn")!.addEventListener("click", () => void signOutCloud());
+document.getElementById("cloudSyncNowBtn")!.addEventListener("click", () => void flushCloudSync());
 
 document.getElementById("settingsLangRow")!.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest("button[data-lang]") as HTMLElement | null;
@@ -1749,6 +1830,12 @@ function applyLanguage() {
   document.getElementById("exportAllBtn")!.textContent = s.exportAllBtn;
   document.getElementById("importBtn")!.textContent = s.importBtn;
   document.getElementById("clearAllBtn")!.textContent = s.clearAllBtn;
+  document.getElementById("settingsCloudLabel")!.textContent = s.settingsCloudLabel;
+  document.getElementById("cloudSyncHint")!.textContent = s.cloudSyncHint;
+  document.getElementById("cloudSignInBtn")!.textContent = s.cloudSignInBtn;
+  document.getElementById("cloudSignOutBtn")!.textContent = s.cloudSignOutBtn;
+  document.getElementById("cloudSyncNowBtn")!.textContent = s.cloudSyncNowBtn;
+  updateSyncIndicator();
   document.getElementById("exportFormatTitle")!.textContent = s.exportFormatTitle;
   document.getElementById("exportFormatHint")!.textContent = s.exportFormatHint;
   document.getElementById("exportFormatJsonBtn")!.textContent = s.exportFormatJsonBtn;
@@ -1863,7 +1950,54 @@ function applyRoleView() {
   }
 }
 
-// ---------- reacting to remote room-metadata changes (the GM editing from another device/tab) ----------
+// ---------- cloud sync: merging what Firestore has with what's local (see cloudSync.ts) ----------
+// Last-write-wins per note, by `updatedAt` — a cloud copy only overwrites the local one when it's
+// genuinely newer, so it can never clobber an edit this device made more recently than what's
+// arriving. Re-rendering the editor when the ACTIVE note changes is a deliberate simplification: it
+// mirrors how switching notes already re-renders from scratch, at the small cost of a visible refresh
+// if a remote update happens to land in the same instant as active typing here.
+function mergeCloudNotes(cloudNotes: Note[], removedIds: string[]) {
+  let listChanged = false;
+  let activeNoteChanged = false;
+  removedIds.forEach((id) => {
+    const idx = notes.findIndex((n) => n.id === id);
+    if (idx === -1) return;
+    notes.splice(idx, 1);
+    listChanged = true;
+    if (activeId === id) {
+      activeId = notes.length ? notes[0].id : null;
+      activeNoteChanged = true;
+    }
+  });
+  cloudNotes.forEach((cloudNote) => {
+    const idx = notes.findIndex((n) => n.id === cloudNote.id);
+    if (idx === -1) {
+      notes.push(cloudNote);
+      listChanged = true;
+    } else if (cloudNote.updatedAt > notes[idx].updatedAt) {
+      notes[idx] = cloudNote;
+      listChanged = true;
+      if (activeId === cloudNote.id) activeNoteChanged = true;
+    }
+  });
+  if (!listChanged) return;
+  void persist();
+  renderList();
+  if (activeNoteChanged) renderEditor();
+}
+
+let stopCloudWatch: (() => void) | null = null;
+function applyCloudAuthState(user: User | null) {
+  stopCloudWatch?.();
+  stopCloudWatch = null;
+  if (user && currentRoomIdForCloud) {
+    stopCloudWatch = watchCloudNotes(currentRoomIdForCloud, mergeCloudNotes);
+  }
+  updateCloudAccountUI(user);
+  updateSyncIndicator();
+}
+let currentRoomIdForCloud: string | null = null;
+
 // ---------- boot ----------
 async function boot() {
   const [initialNotes, initialLanguage, initialAccent, initialRole] = await Promise.all([
@@ -1882,6 +2016,13 @@ async function boot() {
 
   applyLanguage();
   applyRoleView();
+
+  if (cloudSyncAvailable()) {
+    currentRoomIdForCloud = OBR.room.id;
+    initCloudSyncContext(currentRoomIdForCloud, (id) => notes.find((n) => n.id === id));
+    onSyncStatusChange(updateSyncIndicator);
+    onAuthChange(applyCloudAuthState);
+  }
 
   OBR.player.onChange((player) => {
     if (player.role !== role) {
