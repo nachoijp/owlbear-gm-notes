@@ -48,6 +48,16 @@ export interface Strings {
   savingLabel: string;
   wordsCount: (n: number) => string;
   newNoteDefaultTitle: string;
+  blankNote: string;
+  templatesLabel: string;
+  templatesEmpty: string;
+  saveAsTemplateTitle: string;
+  saveAsTemplateAria: string;
+  templateSaved: (title: string) => string;
+  renameTemplateTitle: string;
+  renameTemplateAria: string;
+  deleteTemplateTitle: string;
+  deleteTemplateAria: string;
   resizeTitle: string;
   settingsClose: string;
   settingsAccentLabel: string;
@@ -63,7 +73,9 @@ export interface Strings {
   exportAllBtn: string;
   importBtn: string;
   importNoneFound: string;
-  importSuccess: (n: number) => string;
+  importSuccess: (notes: number, templates: number) => string;
+  importNothingNew: string;
+  templatesFolder: string;
   clearAllBtn: string;
   clearAllConfirm: (n: number) => string;
   exportFormatTitle: string;
@@ -109,6 +121,16 @@ const STRINGS: Record<Language, Strings> = {
     savingLabel: "Guardando…",
     wordsCount: (n) => n + (n === 1 ? " palabra" : " palabras"),
     newNoteDefaultTitle: "Nueva nota",
+    blankNote: "Nota en blanco",
+    templatesLabel: "Plantillas",
+    templatesEmpty: "Todavía no hay plantillas. Guardá cualquier nota como plantilla con el botón de su fila en la lista de notas.",
+    saveAsTemplateTitle: "Guardar como plantilla",
+    saveAsTemplateAria: "Guardar como plantilla: ",
+    templateSaved: (title) => `Plantilla “${title}” guardada.`,
+    renameTemplateTitle: "Renombrar plantilla",
+    renameTemplateAria: "Renombrar plantilla ",
+    deleteTemplateTitle: "Eliminar plantilla",
+    deleteTemplateAria: "Eliminar plantilla ",
     resizeTitle: "Redimensionar panel",
     settingsClose: "Cerrar",
     settingsAccentLabel: "Color de acento",
@@ -120,11 +142,18 @@ const STRINGS: Record<Language, Strings> = {
     exportTitle: "Exportar nota",
     exportAria: "Exportar ",
     settingsBackupLabel: "Respaldo de notas",
-    backupHint: "Las notas se guardan en este dispositivo, no en la sala. Exportalas a un archivo para llevarlas a otro dispositivo o como respaldo, e importalas cuando quieras.",
+    backupHint: "Las notas se guardan en este dispositivo, no en la sala. Exportalas a un archivo para llevarlas a otro dispositivo o como respaldo, e importalas cuando quieras. Exportar todas también incluye tus plantillas.",
     exportAllBtn: "Exportar todas",
     importBtn: "Importar",
-    importNoneFound: "No se encontró ninguna nota válida en el/los archivo(s) elegido(s).",
-    importSuccess: (n) => n === 1 ? "Se importó 1 nota." : `Se importaron ${n} notas.`,
+    importNoneFound: "No se encontró ninguna nota ni plantilla válida en el/los archivo(s) elegido(s).",
+    importSuccess: (notes, templates) => {
+      const parts: string[] = [];
+      if (notes) parts.push(notes === 1 ? "1 nota" : `${notes} notas`);
+      if (templates) parts.push(templates === 1 ? "1 plantilla" : `${templates} plantillas`);
+      return `Se importó: ${parts.join(" y ")}.`;
+    },
+    importNothingNew: "Las plantillas del archivo ya estaban guardadas — no se agregó nada nuevo.",
+    templatesFolder: "plantillas",
     clearAllBtn: "Borrar todas las notas",
     clearAllConfirm: (n) => `¿Borrar las ${n} nota(s) guardadas en este dispositivo para esta sala? Esta acción no se puede deshacer — exportalas antes si querés conservarlas.`,
     exportFormatTitle: "Formato de exportación",
@@ -179,6 +208,16 @@ const STRINGS: Record<Language, Strings> = {
     savingLabel: "Saving…",
     wordsCount: (n) => n + (n === 1 ? " word" : " words"),
     newNoteDefaultTitle: "New note",
+    blankNote: "Blank note",
+    templatesLabel: "Templates",
+    templatesEmpty: "No templates yet. Save any note as a template with the button on its row in the notes list.",
+    saveAsTemplateTitle: "Save as template",
+    saveAsTemplateAria: "Save as template: ",
+    templateSaved: (title) => `Saved “${title}” as a template.`,
+    renameTemplateTitle: "Rename template",
+    renameTemplateAria: "Rename template ",
+    deleteTemplateTitle: "Delete template",
+    deleteTemplateAria: "Delete template ",
     resizeTitle: "Resize panel",
     settingsClose: "Close",
     settingsAccentLabel: "Accent color",
@@ -190,11 +229,18 @@ const STRINGS: Record<Language, Strings> = {
     exportTitle: "Export note",
     exportAria: "Export ",
     settingsBackupLabel: "Notes backup",
-    backupHint: "Notes are stored on this device, not in the room. Export them to a file to take them to another device or as a backup, and import them back whenever you want.",
+    backupHint: "Notes are stored on this device, not in the room. Export them to a file to take them to another device or as a backup, and import them back whenever you want. Export all also includes your templates.",
     exportAllBtn: "Export all",
     importBtn: "Import",
-    importNoneFound: "No valid notes were found in the chosen file(s).",
-    importSuccess: (n) => n === 1 ? "Imported 1 note." : `Imported ${n} notes.`,
+    importNoneFound: "No valid notes or templates were found in the chosen file(s).",
+    importSuccess: (notes, templates) => {
+      const parts: string[] = [];
+      if (notes) parts.push(notes === 1 ? "1 note" : `${notes} notes`);
+      if (templates) parts.push(templates === 1 ? "1 template" : `${templates} templates`);
+      return `Imported ${parts.join(" and ")}.`;
+    },
+    importNothingNew: "The templates in the file were already saved — nothing new was added.",
+    templatesFolder: "templates",
     clearAllBtn: "Clear all notes",
     clearAllConfirm: (n) => `Delete the ${n} note(s) stored on this device for this room? This can't be undone — export them first if you want to keep them.`,
     exportFormatTitle: "Export format",

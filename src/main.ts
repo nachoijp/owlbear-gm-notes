@@ -5,6 +5,10 @@ import { getStrings } from "./i18n";
 import type { Language, Strings, ToolbarStrings } from "./i18n";
 import { getNotes, setNotes, clearAllNotes, notesStorageBytes, sanitizeNote } from "./notes";
 import type { Note } from "./notes";
+import { getPluginId } from "./pluginId";
+import { getTemplates, setTemplates, resolveTemplate, toCustomTemplate, sanitizeTemplate } from "./templates";
+import type { Template } from "./templates";
+import { watchCloudTemplates, pushTemplate, deleteTemplateFromCloud } from "./templateSync";
 import { getLanguage, setLanguage, getAccentPref, setAccentPref } from "./prefs";
 import type { AccentPref } from "./prefs";
 import { ACCENTS, ACCENT_ORDER, watchTheme } from "./theme";
@@ -26,6 +30,12 @@ import type { User } from "firebase/auth";
 
 // ---------- state ----------
 let notes: Note[] = [];
+// Global to this browser, not per room — see templates.ts.
+let templates: Template[] = [];
+// False until the stored templates have actually been read. persistTemplates() writes the whole
+// list, so writing after a failed load would replace every stored template with just the in-memory
+// ones (empty plus whatever was added since).
+let templatesLoaded = false;
 let activeId: string | null = null;
 let searchTerm = "";
 let language: Language = "en";
@@ -404,6 +414,16 @@ function renderList() {
       title.className = "title";
       title.textContent = n.title || s.untitled;
 
+      const templateBtn = document.createElement("button");
+      templateBtn.className = "row-btn template-btn";
+      templateBtn.title = s.saveAsTemplateTitle;
+      templateBtn.setAttribute("aria-label", s.saveAsTemplateAria + (n.title || s.untitled));
+      templateBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2.2 1.6"/><path d="M5.5 6h5M5.5 8.5h5M5.5 11h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+      templateBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        void saveAsTemplate(n);
+      });
+
       const exportBtn = document.createElement("button");
       exportBtn.className = "row-btn export-btn";
       exportBtn.title = s.exportTitle;
@@ -435,9 +455,15 @@ function renderList() {
       });
 
       row.appendChild(title);
-      row.appendChild(exportBtn);
-      row.appendChild(editBtn);
-      row.appendChild(del);
+
+      // 2x2 grid beside the whole item (not inline after the title) so the title keeps most of the
+      // row's width — four buttons in one line left little room for it.
+      const actions = document.createElement("div");
+      actions.className = "row-actions";
+      actions.appendChild(templateBtn);
+      actions.appendChild(exportBtn);
+      actions.appendChild(editBtn);
+      actions.appendChild(del);
 
       const snippet = document.createElement("div");
       snippet.className = "snippet";
@@ -447,9 +473,15 @@ function renderList() {
       meta.className = "meta";
       meta.textContent = s.editedAgo + relativeTime(n.updatedAt);
 
-      item.appendChild(row);
-      item.appendChild(snippet);
-      item.appendChild(meta);
+      const body = document.createElement("div");
+      body.className = "note-item-body";
+      body.appendChild(row);
+      body.appendChild(snippet);
+      body.appendChild(meta);
+
+      item.classList.add("with-actions");
+      item.appendChild(body);
+      item.appendChild(actions);
 
       item.addEventListener("click", () => {
         activeId = n.id;
@@ -501,8 +533,15 @@ async function deleteNote(id: string) {
   renderEditor();
 }
 
-async function createNote() {
-  const note: Note = { id: "n" + Date.now(), title: strings().newNoteDefaultTitle, html: "", updatedAt: Date.now() };
+async function createNote(template?: Template) {
+  // A built-in's text is copied in the current language and stays that way in the note.
+  const source = template ? resolveTemplate(template, language) : null;
+  const note: Note = {
+    id: "n" + Date.now(),
+    title: source ? source.title : strings().newNoteDefaultTitle,
+    html: source ? source.html : "",
+    updatedAt: Date.now(),
+  };
   notes.unshift(note);
   activeId = note.id;
   markNoteDirty(note.id);
@@ -510,8 +549,195 @@ async function createNote() {
   renderList();
   renderEditor();
   closeDropdown();
+  closeTemplateMenu();
   const titleInput = editorPaneEl.querySelector(".note-title-input") as HTMLInputElement | null;
   if (titleInput) { titleInput.focus(); titleInput.select(); }
+}
+
+// ---------- templates: saved note bodies to start new notes from (see templates.ts) ----------
+// Templates are shared by every GM Notes window in this browser (any room), but each window keeps
+// its own in-memory copy and saves the whole list — so a window must pick up another's saves before
+// its own next save, or it would write back a list missing them. Each successful save announces
+// itself here; every other window then reloads the list from storage.
+const templatesChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(getPluginId("templates")) : null;
+templatesChannel?.addEventListener("message", () => {
+  if (!templatesLoaded) return;
+  getTemplates()
+    .then((fresh) => {
+      templates = fresh;
+      renderTemplateList();
+    })
+    .catch((err) => console.error("Notes: failed to reload templates changed in another window", err));
+});
+async function persistTemplates(): Promise<boolean> {
+  if (!templatesLoaded) {
+    showStorageBanner(strings().storageBannerGeneric);
+    return false;
+  }
+  try {
+    await setTemplates(templates);
+    templatesChannel?.postMessage("changed");
+    return true;
+  } catch (err) {
+    console.error("Notes: failed to save templates", err);
+    showStorageBanner(strings().storageBannerGeneric);
+    return false;
+  }
+}
+
+async function saveAsTemplate(note: Note) {
+  const title = note.title || strings().untitled;
+  const template: Template = { id: "t" + Date.now(), title, html: note.html, updatedAt: Date.now() };
+  templates.push(template);
+  const saved = await persistTemplates();
+  void pushTemplate(template);
+  renderTemplateList();
+  if (saved) void OBR.notification.show(strings().templateSaved(title), "SUCCESS");
+}
+
+async function deleteTemplate(id: string) {
+  const idx = templates.findIndex((t) => t.id === id);
+  if (idx === -1) return;
+  templates.splice(idx, 1);
+  await persistTemplates();
+  void deleteTemplateFromCloud(id);
+  renderTemplateList();
+}
+
+function startTemplateRename(itemEl: HTMLElement, template: Template) {
+  const titleSpan = itemEl.querySelector(".title") as HTMLElement;
+  const input = document.createElement("input");
+  input.className = "rename-input";
+  input.value = resolveTemplate(template, language).title;
+  titleSpan.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  function commit() {
+    if (done) return;
+    done = true;
+    const newTitle = input.value.trim() || strings().untitled;
+    // Leaving a built-in's name as-is keeps it a built-in (still follows the language).
+    if (template.builtin && newTitle === resolveTemplate(template, language).title) {
+      renderTemplateList();
+      return;
+    }
+    toCustomTemplate(template, language);
+    template.title = newTitle;
+    template.updatedAt = Date.now();
+    void persistTemplates();
+    void pushTemplate(template);
+    renderTemplateList();
+  }
+  input.addEventListener("keydown", (ev) => {
+    // Escape here cancels the rename only — it must not also close the whole menu.
+    ev.stopPropagation();
+    if (ev.key === "Enter") { ev.preventDefault(); commit(); }
+    if (ev.key === "Escape") { done = true; renderTemplateList(); }
+  });
+  input.addEventListener("blur", commit);
+  input.addEventListener("click", (ev) => ev.stopPropagation());
+}
+
+const templateListEl = document.getElementById("templateList") as HTMLElement;
+
+function renderTemplateList() {
+  const s = strings();
+  if (!templates.length) {
+    templateListEl.innerHTML = `<div class="empty-list">${escapeHtml(s.templatesEmpty)}</div>`;
+    return;
+  }
+  templateListEl.innerHTML = "";
+  templates
+    .map((t) => ({ t, shown: resolveTemplate(t, language) }))
+    .sort((a, b) => a.shown.title.localeCompare(b.shown.title, language))
+    .forEach(({ t, shown }) => {
+      const item = document.createElement("div");
+      item.className = "note-item";
+      item.setAttribute("role", "menuitem");
+      item.tabIndex = 0;
+
+      const row = document.createElement("div");
+      row.className = "note-item-row";
+
+      const title = document.createElement("span");
+      title.className = "title";
+      title.textContent = shown.title || s.untitled;
+
+      const editBtn = document.createElement("button");
+      editBtn.className = "row-btn edit-btn";
+      editBtn.title = s.renameTemplateTitle;
+      editBtn.setAttribute("aria-label", s.renameTemplateAria + (shown.title || s.untitled));
+      editBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M11 2.5 13.5 5 5.8 12.7l-3 .6.6-3L11 2.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+      editBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        startTemplateRename(item, t);
+      });
+
+      const del = document.createElement("button");
+      del.className = "row-btn del-btn";
+      del.title = s.deleteTemplateTitle;
+      del.setAttribute("aria-label", s.deleteTemplateAria + (shown.title || s.untitled));
+      del.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3.5 4.5h9M6.5 4.5V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.5M4.5 4.5 5 13a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1l.5-8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      del.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        void deleteTemplate(t.id);
+      });
+
+      row.appendChild(title);
+      row.appendChild(editBtn);
+      row.appendChild(del);
+
+      const snippet = document.createElement("div");
+      snippet.className = "snippet";
+      snippet.textContent = stripHtml(shown.html) || s.emptyNote;
+
+      item.appendChild(row);
+      item.appendChild(snippet);
+
+      item.addEventListener("click", () => void createNote(t));
+      item.addEventListener("keydown", (ev) => {
+        if (ev.target !== item) return;
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          void createNote(t);
+        }
+      });
+
+      templateListEl.appendChild(item);
+    });
+}
+
+const newNoteWrap = document.getElementById("newNoteWrap")!;
+const newNoteBtnEl = document.getElementById("newNoteBtn")!;
+const templateMenu = document.getElementById("templateMenu")!;
+
+function openTemplateMenu() {
+  closeDropdown();
+  renderTemplateList();
+  templateMenu.hidden = false;
+  newNoteBtnEl.setAttribute("aria-expanded", "true");
+  (document.getElementById("blankNoteBtn") as HTMLElement).focus();
+  document.addEventListener("pointerdown", onTemplateMenuPointerDown, true);
+  document.addEventListener("keydown", onTemplateMenuKeydown, true);
+}
+function closeTemplateMenu() {
+  if (templateMenu.hidden) return;
+  templateMenu.hidden = true;
+  newNoteBtnEl.setAttribute("aria-expanded", "false");
+  document.removeEventListener("pointerdown", onTemplateMenuPointerDown, true);
+  document.removeEventListener("keydown", onTemplateMenuKeydown, true);
+}
+function onTemplateMenuPointerDown(ev: Event) {
+  if (!newNoteWrap.contains(ev.target as Node)) closeTemplateMenu();
+}
+function onTemplateMenuKeydown(ev: KeyboardEvent) {
+  // This listens in the capture phase, so it runs before a rename input's own handler — Escape
+  // there must only cancel the rename (handled by the input), not close the menu. Closing it would
+  // also move focus away, and the input's blur would then save the half-typed name.
+  if ((ev.target as HTMLElement | null)?.classList?.contains("rename-input")) return;
+  if (ev.key === "Escape") { closeTemplateMenu(); newNoteBtnEl.focus(); }
 }
 
 // ---------- export / import: an escape valve for the room's shared 16kB cap that doesn't need a
@@ -529,6 +755,36 @@ interface NoteExportFile {
 }
 function noteToExportPayload(note: Note): NoteExportFile {
   return { type: "gm-notes-note", version: 1, id: note.id, title: note.title, html: note.html, updatedAt: note.updatedAt };
+}
+// A built-in template is exported as just its marker (empty title/html) — it carries no text of its
+// own, and whichever GM Notes imports it already knows its text in every language.
+interface TemplateExportFile {
+  type: "gm-notes-template";
+  version: 1;
+  id: string;
+  title: string;
+  html: string;
+  updatedAt: number;
+  builtin?: Template["builtin"];
+}
+function templateToExportPayload(template: Template): TemplateExportFile {
+  return {
+    type: "gm-notes-template",
+    version: 1,
+    id: template.id,
+    title: template.title,
+    html: template.html,
+    updatedAt: template.updatedAt,
+    ...(template.builtin ? { builtin: template.builtin } : {}),
+  };
+}
+// Templates travel inside an "export all" zip in their own folder, which is also how import tells a
+// template's Markdown file apart from a note's (a .md file has nowhere else to say what it is).
+// Folder names in both languages are recognized, since the export uses the exporting GM's language.
+const TEMPLATE_FOLDER_NAMES = ["plantillas", "templates"];
+function isInTemplateFolder(zipPath: string): boolean {
+  const parts = zipPath.split("/");
+  return parts.length > 1 && TEMPLATE_FOLDER_NAMES.includes(parts[0].toLowerCase());
 }
 // A freshly-imported note always gets a brand-new id, even if the file still carries its original
 // one (kept only so a future "was this already imported" check has something to compare) — re-importing
@@ -567,22 +823,36 @@ function exportNote(note: Note, format: ExportFormat) {
 }
 
 async function exportAllNotes(format: ExportFormat) {
-  if (!notes.length) return;
-  if (notes.length === 1) {
+  // Markdown is plain text — a built-in template's language-following marker can't survive it, and
+  // every GM Notes install already has the built-ins anyway, so only the GM's own templates go there.
+  const exportedTemplates = format === "json" ? templates : templates.filter((t) => !t.builtin);
+  if (!notes.length && !exportedTemplates.length) return;
+  if (notes.length === 1 && !exportedTemplates.length) {
     exportNote(notes[0], format);
     return;
   }
   const zip = new JSZip();
-  const usedNames = new Set<string>();
   const ext = format === "json" ? ".json" : ".md";
-  notes.forEach((n) => {
-    const base = safeFileName(n.title);
+  function addUnique(usedNames: Set<string>, folder: string, title: string, content: string) {
+    const base = safeFileName(title);
     let name = base;
     let i = 2;
     while (usedNames.has(name)) name = `${base}-${i++}`;
     usedNames.add(name);
+    zip.file(folder + name + ext, content);
+  }
+  const noteNames = new Set<string>();
+  notes.forEach((n) => {
     const content = format === "json" ? JSON.stringify(noteToExportPayload(n), null, 2) : htmlToMarkdown(n.html);
-    zip.file(name + ext, content);
+    addUnique(noteNames, "", n.title, content);
+  });
+  const templateNames = new Set<string>();
+  const folder = strings().templatesFolder + "/";
+  exportedTemplates.forEach((t) => {
+    // A built-in's file is named after its current-language title, purely for readability.
+    const title = resolveTemplate(t, language).title;
+    const content = format === "json" ? JSON.stringify(templateToExportPayload(t), null, 2) : htmlToMarkdown(t.html);
+    addUnique(templateNames, folder, title, content);
   });
   const blob = await zip.generateAsync({ type: "blob" });
   downloadBlob(blob, "gm-notes-export.zip");
@@ -628,40 +898,103 @@ function noteFromMarkdownFile(filename: string, text: string): Note {
   return { id: freshNoteId(), title: title || strings().untitled, html: markdownToHtml(text), updatedAt: Date.now() };
 }
 
-async function notesFromImportFile(file: File): Promise<Note[]> {
+// A JSON file is a template if it says so (type "gm-notes-template", wherever it sits), or if it sits
+// in a zip's templates folder.
+function parseImportedTemplate(json: string, inTemplateFolder: boolean): Template | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  const declared = (data as { type?: unknown } | null)?.type === "gm-notes-template";
+  if (!declared && !inTemplateFolder) return null;
+  const sanitized = sanitizeTemplate(data);
+  return sanitized ? { ...sanitized, id: "t" + freshNoteId() } : null;
+}
+
+interface ImportedContent {
+  notes: Note[];
+  templates: Template[];
+}
+
+async function importFromJsonText(json: string, inTemplateFolder: boolean, into: ImportedContent) {
+  const template = parseImportedTemplate(json, inTemplateFolder);
+  if (template) {
+    into.templates.push(template);
+    return;
+  }
+  const note = parseImportedNote(json);
+  if (note) into.notes.push(note);
+}
+
+async function contentFromImportFile(file: File): Promise<ImportedContent> {
+  const result: ImportedContent = { notes: [], templates: [] };
   if (/\.zip$/i.test(file.name)) {
     const zip = await JSZip.loadAsync(file);
-    const results: Note[] = [];
     for (const entry of Object.values(zip.files)) {
       if (entry.dir) continue;
       const entryName = entry.name.split("/").pop() || entry.name;
+      const inTemplateFolder = isInTemplateFolder(entry.name);
       if (/\.json$/i.test(entryName)) {
-        const parsed = parseImportedNote(await entry.async("text"));
-        if (parsed) results.push(parsed);
+        await importFromJsonText(await entry.async("text"), inTemplateFolder, result);
       } else if (/\.md$/i.test(entryName)) {
-        results.push(noteFromMarkdownFile(entryName, await entry.async("text")));
+        const fromMarkdown = noteFromMarkdownFile(entryName, await entry.async("text"));
+        if (inTemplateFolder) result.templates.push({ ...fromMarkdown, id: "t" + freshNoteId() });
+        else result.notes.push(fromMarkdown);
       }
     }
-    return results;
+    return result;
   }
   if (/\.md$/i.test(file.name)) {
-    return [noteFromMarkdownFile(file.name, await file.text())];
+    result.notes.push(noteFromMarkdownFile(file.name, await file.text()));
+    return result;
   }
-  const parsed = parseImportedNote(await file.text());
-  return parsed ? [parsed] : [];
+  await importFromJsonText(await file.text(), false, result);
+  return result;
+}
+
+// Re-importing the same export (or one from another browser that also has the built-ins) mustn't
+// pile up copies: a built-in is skipped if this browser already has that built-in, and a custom
+// template if one with the exact same title and body already exists.
+function isDuplicateTemplate(candidate: Template, existing: Template[]): boolean {
+  return existing.some((t) =>
+    candidate.builtin
+      ? t.builtin === candidate.builtin
+      : !t.builtin && t.title === candidate.title && t.html === candidate.html
+  );
 }
 
 async function importNotesFromFiles(files: FileList) {
   const imported: Note[] = [];
+  const importedTemplates: Template[] = [];
   for (const file of Array.from(files)) {
     try {
-      imported.push(...(await notesFromImportFile(file)));
+      const content = await contentFromImportFile(file);
+      imported.push(...content.notes);
+      importedTemplates.push(...content.templates);
     } catch (err) {
       console.error("Notes: failed to read import file", file.name, err);
     }
   }
-  if (!imported.length) {
+  if (!imported.length && !importedTemplates.length) {
     window.alert(strings().importNoneFound);
+    return;
+  }
+  const newTemplates: Template[] = [];
+  importedTemplates.forEach((t) => {
+    if (!isDuplicateTemplate(t, [...templates, ...newTemplates])) newTemplates.push(t);
+  });
+  if (newTemplates.length) {
+    const importedAt = Date.now();
+    newTemplates.forEach((t) => { t.updatedAt = importedAt; });
+    templates = [...templates, ...newTemplates];
+    await persistTemplates();
+    newTemplates.forEach((t) => void pushTemplate(t));
+    renderTemplateList();
+  }
+  if (!imported.length) {
+    window.alert(newTemplates.length ? strings().importSuccess(0, newTemplates.length) : strings().importNothingNew);
     return;
   }
   // The exported file carries the ORIGINAL note's updatedAt, and sanitizeNote() (reused as-is from
@@ -683,7 +1016,7 @@ async function importNotesFromFiles(files: FileList) {
   renderList();
   renderEditor();
   updateStorageMeter();
-  window.alert(strings().importSuccess(imported.length));
+  window.alert(strings().importSuccess(imported.length, newTemplates.length));
 }
 
 // A full, explicit reset for this room's local storage — distinct from deleting notes one at a time,
@@ -1660,6 +1993,7 @@ const switcherTrigger = document.getElementById("switcherTrigger")!;
 const switcherDropdown = document.getElementById("switcherDropdown")!;
 
 function openDropdown() {
+  closeTemplateMenu();
   switcherDropdown.hidden = false;
   noteSwitcher.classList.add("open");
   switcherTrigger.setAttribute("aria-expanded", "true");
@@ -1685,7 +2019,10 @@ switcherTrigger.addEventListener("click", () => {
   if (switcherDropdown.hidden) openDropdown(); else closeDropdown();
 });
 
-document.getElementById("newNoteBtn")!.addEventListener("click", () => void createNote());
+newNoteBtnEl.addEventListener("click", () => {
+  if (templateMenu.hidden) openTemplateMenu(); else closeTemplateMenu();
+});
+document.getElementById("blankNoteBtn")!.addEventListener("click", () => void createNote());
 searchInput.addEventListener("input", function (this: HTMLInputElement) {
   searchTerm = this.value.trim();
   renderList();
@@ -1810,6 +2147,9 @@ function applyLanguage() {
   const newNoteBtn = document.getElementById("newNoteBtn")!;
   newNoteBtn.title = s.newNoteTitle;
   newNoteBtn.setAttribute("aria-label", s.newNoteTitle);
+  document.getElementById("blankNoteLabel")!.textContent = s.blankNote;
+  document.getElementById("templatesLabel")!.textContent = s.templatesLabel;
+  renderTemplateList();
 
   const settingsBtn = document.getElementById("settingsBtn")!;
   settingsBtn.title = s.settingsTitle;
@@ -1946,6 +2286,7 @@ function applyRoleView() {
   document.getElementById("gmGate")!.hidden = !isPlayer;
   if (isPlayer) {
     closeDropdown();
+    closeTemplateMenu();
     closeSettings();
   }
 }
@@ -1987,11 +2328,25 @@ function mergeCloudNotes(cloudNotes: Note[], removedIds: string[]) {
 }
 
 let stopCloudWatch: (() => void) | null = null;
+let stopTemplateWatch: (() => void) | null = null;
 function applyCloudAuthState(user: User | null) {
   stopCloudWatch?.();
   stopCloudWatch = null;
+  stopTemplateWatch?.();
+  stopTemplateWatch = null;
   if (user && currentRoomIdForCloud) {
     stopCloudWatch = watchCloudNotes(currentRoomIdForCloud, mergeCloudNotes);
+  }
+  if (user) {
+    // Templates aren't per room, so they sync regardless of which room this is.
+    stopTemplateWatch = watchCloudTemplates(
+      () => templates,
+      (next) => {
+        templates = next;
+        void persistTemplates();
+        renderTemplateList();
+      }
+    );
   }
   updateCloudAccountUI(user);
   updateSyncIndicator();
@@ -2011,6 +2366,13 @@ async function boot() {
   accentPref = initialAccent;
   role = initialRole;
   activeId = notes.length ? notes[0].id : null;
+  try {
+    templates = await getTemplates();
+    templatesLoaded = true;
+  } catch (err) {
+    // Templates are an extra — failing to load them mustn't keep the notes themselves from opening.
+    console.error("Notes: failed to load templates", err);
+  }
 
   setThemeAccent = watchTheme(panel, accentPref);
 

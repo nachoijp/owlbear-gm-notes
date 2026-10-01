@@ -89,6 +89,19 @@ export function onSyncStatusChange(callback: (status: SyncStatus) => void): () =
   return () => statusListeners.delete(callback);
 }
 
+/** For other sync modules (see templateSync.ts): the Firestore handle and signed-in user, or null
+ * when cloud sync is unavailable or nobody is signed in. */
+export function cloudContext(): { db: Firestore; user: User } | null {
+  const init = ensureInitialized();
+  const user = init ? init.auth.currentUser : null;
+  return init && user ? { db: init.db, user } : null;
+}
+
+/** Lets other sync modules surface a failure on the same cloud indicator notes use. */
+export function reportCloudSyncError() {
+  setStatus("error");
+}
+
 function roomNoteDoc(uid: string, roomId: string, noteId: string) {
   return doc(db!, "users", uid, "rooms", roomId, "notes", noteId);
 }
