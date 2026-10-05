@@ -3,6 +3,7 @@
   "version": "1.2.0",
   "manifest_version": 3,
   "author": "Ignacio Pedraza",
+  "homepage_url": "https://github.com/nachoijp/owlbear-gm-notes",
   "icon": "https://notes.ijpedraza.com/logo.svg",
   "description": "Local dev build of GM Notes, served from the Vite dev server.",
   "action": {

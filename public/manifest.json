@@ -3,6 +3,7 @@
   "version": "1.2.0",
   "manifest_version": 3,
   "author": "Ignacio Pedraza",
+  "homepage_url": "https://github.com/nachoijp/owlbear-gm-notes",
   "icon": "https://notes.ijpedraza.com/logo.svg",
   "description": "Rich-text notes for the GM only — a private campaign journal that stays out of players' hands.",
   "action": {
