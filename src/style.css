@@ -44,20 +44,20 @@ body{
 .panel *{ box-sizing:border-box; }
 .panel :focus-visible{ outline:2px solid var(--primary-main); outline-offset:-1px; border-radius:6px; }
 
-.note-list, .editor-scroll, .pill-swatches, .settings-modal-body{
+.note-list, .editor-scroll, .pill-swatches, .settings-modal-body, .editor-surface table{
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text-primary) 20%, transparent) transparent;
 }
 .note-list::-webkit-scrollbar, .editor-scroll::-webkit-scrollbar, .settings-modal-body::-webkit-scrollbar{ width:8px; }
-.pill-swatches::-webkit-scrollbar{ height:8px; }
-.note-list::-webkit-scrollbar-track, .editor-scroll::-webkit-scrollbar-track, .pill-swatches::-webkit-scrollbar-track, .settings-modal-body::-webkit-scrollbar-track{
+.pill-swatches::-webkit-scrollbar, .editor-surface table::-webkit-scrollbar{ height:8px; }
+.note-list::-webkit-scrollbar-track, .editor-scroll::-webkit-scrollbar-track, .pill-swatches::-webkit-scrollbar-track, .settings-modal-body::-webkit-scrollbar-track, .editor-surface table::-webkit-scrollbar-track{
   background:transparent;
 }
-.note-list::-webkit-scrollbar-thumb, .editor-scroll::-webkit-scrollbar-thumb, .pill-swatches::-webkit-scrollbar-thumb, .settings-modal-body::-webkit-scrollbar-thumb{
+.note-list::-webkit-scrollbar-thumb, .editor-scroll::-webkit-scrollbar-thumb, .pill-swatches::-webkit-scrollbar-thumb, .settings-modal-body::-webkit-scrollbar-thumb, .editor-surface table::-webkit-scrollbar-thumb{
   background-color: color-mix(in srgb, var(--text-primary) 20%, transparent);
   border-radius:4px;
 }
-.note-list::-webkit-scrollbar-thumb:hover, .editor-scroll::-webkit-scrollbar-thumb:hover, .pill-swatches::-webkit-scrollbar-thumb:hover, .settings-modal-body::-webkit-scrollbar-thumb:hover{
+.note-list::-webkit-scrollbar-thumb:hover, .editor-scroll::-webkit-scrollbar-thumb:hover, .pill-swatches::-webkit-scrollbar-thumb:hover, .settings-modal-body::-webkit-scrollbar-thumb:hover, .editor-surface table::-webkit-scrollbar-thumb:hover{
   background-color: color-mix(in srgb, var(--text-primary) 32%, transparent);
 }
 
@@ -201,7 +201,7 @@ body{
 .editor-empty{ flex:1; display:flex; align-items:center; justify-content:center; color:var(--text-disabled); font-size:12.5px; text-align:center; padding:20px; }
 
 .toolbar{
-  flex:0 0 auto; display:flex; align-items:center; gap:2px; flex-wrap:wrap;
+  flex:0 0 auto; display:flex; align-items:center; gap:1px; flex-wrap:wrap;
   padding:3px 4px; background:var(--bg-paper); border-bottom:1px solid var(--divider);
 }
 .toolbar button{
@@ -211,9 +211,13 @@ body{
 .toolbar button svg{ width:17px; height:17px; }
 .toolbar button:hover{ background:color-mix(in srgb, var(--primary-main) 16%, transparent); color:var(--text-primary); }
 .toolbar button.active{ background:color-mix(in srgb, var(--primary-main) 20%, transparent); color:var(--primary-light); }
-/* Fixed spacing, sized so the whole toolbar fits on one row at the panel's default width (434px)
-   with a little room to spare. */
-.toolbar .tb-sep{ width:1px; align-self:stretch; margin:4px 6px; background:var(--divider); }
+/* Separators take up whatever room the row has left, so the groups spread evenly across it: from
+   7px (the tightest that fits the whole toolbar on one row at the panel's default width, 434px) up
+   to 14px. The line is drawn centered in that room. */
+.toolbar .tb-sep{
+  flex:1 1 0; min-width:7px; max-width:14px; align-self:stretch; margin:4px 0;
+  background:linear-gradient(var(--divider), var(--divider)) center / 1px 100% no-repeat;
+}
 
 .pill-picker{ position:relative; display:inline-flex; }
 .pill-picker .pill-picker-btn{
@@ -225,7 +229,7 @@ body{
 .pill-picker .block-picker-btn{ width:auto; gap:1px; padding:0 2px 0 4px; font-size:14px; }
 .pill-picker .block-picker-btn svg{ width:12px; height:12px; }
 .block-picker-label{ min-width:16px; text-align:center; }
-.pill-swatches.block-menu{ flex-direction:column; gap:1px; min-width:140px; overflow-x:visible; }
+.pill-swatches.block-menu{ flex-direction:column; gap:1px; min-width:140px; overflow-x:hidden; overflow-y:auto; }
 .toolbar .block-menu button{
   width:auto; height:auto; justify-content:flex-start; padding:4px 8px; border-radius:5px;
   font-weight:400; font-size:12.5px; color:var(--text-primary); white-space:nowrap;
@@ -257,7 +261,7 @@ body{
 }
 .note-title-input::placeholder{ color:var(--text-disabled); }
 
-.editor-scroll{ flex:1; overflow-y:auto; background:transparent; }
+.editor-scroll{ flex:1; overflow-y:auto; background:transparent; position:relative; }
 .editor-surface{
   min-height:100%; padding:8px 16px 24px;
   font-family:var(--font-ui); font-size:13.5px; line-height:1.65; color:var(--text-primary); outline:0;
@@ -437,3 +441,115 @@ body{
 }
 .resize-handle svg{ width:11px; height:11px; }
 .panel.resizing{ user-select:none; }
+
+/* Tables. display:block lets a table wider than the panel scroll sideways on its own instead of
+   widening the whole note; the rows are laid out by the table box Chrome builds inside it.
+   - Without set widths: the tbody is that table box, filling the width, columns sized by content.
+   - With set widths (a <colgroup> of --col-w): colgroup and tbody share an anonymous table box, as
+     wide as the columns add up to. min-width keeps it from squeezing them to fit the panel; long
+     words wrap inside their column instead of widening it. */
+.editor-surface table{ display:block; max-width:100%; overflow-x:auto; margin:0 0 .65em; border-collapse:collapse; }
+.editor-surface table:not(:has(> colgroup)) > tbody{ display:table; width:100%; }
+/* Rounded corners: the table box clips its cells to a rounded shape (collapsed borders can't be
+   rounded themselves) and an inset ring draws the outline's curve at the corners, where the clip
+   cuts the cells' own edge lines. A table with set widths hugs its columns, so the outline does too. */
+.editor-surface table{ border-radius:6px; box-shadow:inset 0 0 0 1px var(--divider); }
+.editor-surface table:has(> colgroup){ width:fit-content; }
+/* A table wider than the note shows as cut where there's more to scroll to: no rounded corners and
+   no outline on that side. Driven by the table's own sideways scroll (so it follows the scrollbar
+   with no script); a table that doesn't scroll has no scroll timeline, so the animation doesn't
+   apply and it keeps all four corners. Browsers without scroll timelines keep them too. */
+@supports (animation-timeline: scroll()) {
+  .editor-surface table{ animation:table-cut-edges linear both; animation-timeline:scroll(self inline); }
+}
+@keyframes table-cut-edges{
+  /* At the start: more to the right. */
+  0%{
+    border-radius:6px 0 0 6px;
+    box-shadow:inset 0 1px 0 0 var(--divider), inset 0 -1px 0 0 var(--divider), inset 1px 0 0 0 var(--divider), inset -1px 0 0 0 transparent;
+  }
+  /* In between: more on both sides. */
+  0.01%, 99.99%{
+    border-radius:0;
+    box-shadow:inset 0 1px 0 0 var(--divider), inset 0 -1px 0 0 var(--divider), inset 1px 0 0 0 transparent, inset -1px 0 0 0 transparent;
+  }
+  /* At the end: more to the left. */
+  100%{
+    border-radius:0 6px 6px 0;
+    box-shadow:inset 0 1px 0 0 var(--divider), inset 0 -1px 0 0 var(--divider), inset 1px 0 0 0 transparent, inset -1px 0 0 0 var(--divider);
+  }
+}
+.editor-surface col{ width:var(--col-w); min-width:var(--col-w); }
+.editor-surface table:has(> colgroup) :is(td, th){ min-width:0; overflow-wrap:anywhere; }
+.editor-surface td, .editor-surface th{
+  border:1px solid var(--divider); padding:3px 8px; min-width:3.5em;
+  vertical-align:top; text-align:left; line-height:1.5;
+}
+/* Over a column border (see the table editor's column resizing), and while dragging one. */
+.editor-surface[data-col-resize]{ cursor:col-resize; }
+.editor-surface[data-col-resize="drag"]{ user-select:none; }
+/* Dragging rows and columns (see the table editor): grips left of the row and above the column under
+   the pointer, and while dragging a shade over what's moving and a line where it'll go. Outside the
+   note's content. */
+.table-grip{
+  position:absolute; z-index:5; padding:0; border:0; border-radius:3px;
+  display:flex; align-items:center; justify-content:center; background:transparent;
+  color:var(--text-disabled); cursor:grab; touch-action:none;
+}
+.table-grip:hover, .table-grip.dragging{ color:var(--text-primary); background:color-mix(in srgb, var(--primary-main) 16%, transparent); }
+.table-grip.dragging{ cursor:grabbing; }
+.table-grip[data-axis="row"] svg{ width:8px; height:14px; }
+.table-grip[data-axis="col"] svg{ width:14px; height:8px; }
+.table-drag-shade{
+  position:absolute; z-index:4; pointer-events:none; border-radius:2px;
+  background:color-mix(in srgb, var(--primary-main) 12%, transparent);
+  outline:1px solid color-mix(in srgb, var(--primary-main) 45%, transparent);
+}
+.table-drop-line{ position:absolute; z-index:5; pointer-events:none; border-radius:1px; background:var(--primary-light); }
+.table-drop-line[data-axis="row"]{ margin-top:-1px; }
+.table-drop-line[data-axis="col"]{ margin-left:-1px; }
+.editor-surface th{ font-weight:700; background:color-mix(in srgb, var(--primary-main) 10%, transparent); }
+/* Cell colors (--cell-c, set from the table menu): a tint, a little stronger on header cells. */
+.editor-surface td[style*="--cell-c"]{ background:color-mix(in srgb, var(--cell-c) 22%, transparent); }
+.editor-surface th[style*="--cell-c"]{ background:color-mix(in srgb, var(--cell-c) 34%, transparent); }
+
+.toolbar [aria-disabled="true"]{ opacity:.35; cursor:default; }
+.toolbar [aria-disabled="true"]:hover{ background:transparent; color:var(--text-secondary); }
+.pill-swatches.table-menu{ flex-direction:column; align-items:center; gap:6px; overflow-x:hidden; overflow-y:auto; }
+.table-grid{ display:grid; grid-template-columns:repeat(6, 18px); gap:3px; }
+.toolbar .table-grid button{
+  width:18px; height:18px; border-radius:3px; border:1px solid var(--divider); background:transparent;
+}
+.toolbar .table-grid button.on{
+  background:color-mix(in srgb, var(--primary-main) 35%, transparent); border-color:var(--primary-main);
+}
+.toolbar .table-grid button:focus-visible{ outline:2px solid var(--primary-light); outline-offset:1px; }
+.table-grid-label{ font-size:11px; color:var(--text-secondary); white-space:nowrap; }
+.table-size{ display:flex; flex-direction:column; align-items:center; gap:6px; }
+.table-size[hidden], .table-actions[hidden]{ display:none; }
+.table-actions{ display:flex; flex-direction:column; gap:1px; min-width:150px; }
+.toolbar .table-actions .table-action{
+  width:auto; height:auto; justify-content:flex-start; gap:8px; padding:4px 8px; border-radius:5px;
+  font-weight:400; font-size:12.5px; color:var(--text-primary); white-space:nowrap;
+}
+.toolbar .table-actions .table-action svg{ width:14px; height:14px; flex:0 0 auto; color:var(--text-secondary); }
+.toolbar .table-actions .table-action.active, .toolbar .table-actions .table-action.active svg{ color:var(--primary-light); }
+.toolbar .table-actions .table-action:disabled{ opacity:.4; cursor:default; background:transparent; }
+.table-actions-sep{ height:1px; margin:3px 4px; background:var(--divider); }
+/* Submenus open in place, under their button (the panel is too narrow for side flyouts). Collapsed
+   ones keep their width, so the menu doesn't grow sideways (past where it was placed) on opening. */
+.table-submenu{ display:flex; flex-direction:column; gap:1px; padding-left:14px; }
+.table-submenu[data-collapsed]{ height:0; overflow:hidden; visibility:hidden; }
+.toolbar .table-actions .table-action svg.table-submenu-chev{ width:10px; height:10px; margin-left:auto; transition:transform .12s; }
+.toolbar .table-actions .table-submenu-btn[aria-expanded="true"] svg.table-submenu-chev{ transform:rotate(90deg); }
+.table-color{ display:flex; flex-direction:column; gap:6px; padding:2px 8px 4px; }
+.table-color-label{ font-size:11px; color:var(--text-secondary); }
+.table-color-scope{ display:flex; border:1px solid var(--divider); border-radius:6px; overflow:hidden; }
+.toolbar .table-color-scope button{
+  flex:1 1 0; width:auto; height:auto; padding:3px 6px; border-radius:0; font-size:11.5px; font-weight:400;
+  color:var(--text-secondary);
+}
+.toolbar .table-color-scope button + button{ border-left:1px solid var(--divider); }
+.toolbar .table-color-scope button[aria-pressed="true"]{ background:color-mix(in srgb, var(--primary-main) 20%, transparent); color:var(--primary-light); }
+.table-color-swatches{ display:grid; grid-template-columns:repeat(7, 16px); gap:5px; justify-content:space-between; }
+.pill-swatches .table-color-swatches .pill-swatch.on{ border-color:var(--text-primary); }

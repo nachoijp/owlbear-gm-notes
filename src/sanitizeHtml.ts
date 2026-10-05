@@ -3,7 +3,7 @@
 // produce: unknown elements are unwrapped to their text, scripts/styles dropped, and only our own
 // attributes and style properties survive. Nothing in the input can run or load anything.
 // DIV: older notes can contain browser-made <div> blocks (from before <p> became the default).
-const CLIP_TAGS = new Set(["P", "DIV", "H1", "H2", "H3", "H4", "BLOCKQUOTE", "UL", "OL", "LI", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "SPAN", "BR", "HR"]);
+const CLIP_TAGS = new Set(["P", "DIV", "H1", "H2", "H3", "H4", "BLOCKQUOTE", "UL", "OL", "LI", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "SPAN", "BR", "HR", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "COLGROUP", "COL"]);
 const CLIP_DROP = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "TEMPLATE", "NOSCRIPT", "SVG", "MATH"]);
 // font-weight/font-style: Chrome un-bolds text inside a heading (or un-italicizes it inside a quote)
 // with a "normal" span.
@@ -41,6 +41,25 @@ export function sanitizeNoteHtml(html: string): string {
       });
       if (/^H[1-4]$/.test(el.tagName) && el.hasAttribute("data-collapsed")) clean.setAttribute("data-collapsed", "");
       if (el.tagName === "P" && el.hasAttribute("data-standalone")) clean.setAttribute("data-standalone", "");
+      // A line that leaves the sections around it (see the editor's exitLevel).
+      const exit = el.getAttribute("data-exit");
+      if (/^(P|DIV|BLOCKQUOTE|H[1-4])$/.test(el.tagName) && exit && /^[1-4]$/.test(exit)) clean.setAttribute("data-exit", exit);
+      if (el.tagName === "TABLE" && el.hasAttribute("data-header-col")) clean.setAttribute("data-header-col", "");
+      // Header cells: scope tells a header-row cell (col) from a header-column one (row).
+      const scope = el.getAttribute("scope");
+      if (el.tagName === "TH" && (scope === "col" || scope === "row")) clean.setAttribute("scope", scope);
+      // Merged cells (the table model caps spans at 50 too) and cell colors.
+      if (el.tagName === "TD" || el.tagName === "TH") {
+        const color = el.style.getPropertyValue("--cell-c").trim();
+        if (color && isSafeClipValue(color)) clean.style.setProperty("--cell-c", color);
+        (["rowspan", "colspan"] as const).forEach((attr) => {
+          const v = el.getAttribute(attr);
+          if (v && /^\d+$/.test(v) && Number(v) >= 2 && Number(v) <= 50) clean.setAttribute(attr, v);
+        });
+      }
+      // Set column widths: whole pixels, nothing else.
+      const colW = el.tagName === "COL" ? el.style.getPropertyValue("--col-w").trim() : "";
+      if (/^\d{1,4}px$/.test(colW)) clean.style.setProperty("--col-w", colW);
       copyChildren(el, clean);
       to.appendChild(clean);
     });

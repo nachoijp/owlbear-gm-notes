@@ -4,8 +4,18 @@ import { sanitizeNote } from "./notes";
 import type { Note } from "./notes";
 import type { Language } from "./i18n";
 
-export type BuiltinTemplateId = "npc" | "location" | "sessionPrep" | "sessionRecap" | "demo";
-const BUILTIN_IDS: BuiltinTemplateId[] = ["npc", "location", "sessionPrep", "sessionRecap", "demo"];
+export type BuiltinTemplateId =
+  | "npc"
+  | "location"
+  | "sessionPrep"
+  | "sessionRecap"
+  | "monster5e"
+  | "dhAdversary"
+  | "dhEnvironment"
+  | "demo";
+const BUILTIN_IDS: BuiltinTemplateId[] = ["npc", "location", "sessionPrep", "sessionRecap", "monster5e", "dhAdversary", "dhEnvironment", "demo"];
+// Built-ins added in a later version reach existing installs through "restore default templates"
+// (see missingBuiltins), for the same reason.
 // "demo" (the formatting tour) only reaches new installs, seeded with the rest: adding it to existing
 // template lists would let a device that seeds it later re-push one the GM already deleted on
 // another device, since cloud sync keeps no record of deleted built-ins.
@@ -124,6 +134,27 @@ function fields(labels: string[]): string {
 const EMPTY_LIST = "<ul><li><br></li></ul>";
 const EMPTY_PARAGRAPH = "<p><br></p>";
 
+// Stat blocks are tables, empty: the structure of a game's stat block, none of its content. They all
+// get set widths adding up to the same total (just under the panel's default width), so a stat
+// block's tables line up; sized by content, an empty value column would get almost no room.
+const EMPTY_CELL = "<td><br></td>";
+const STAT_BLOCK_WIDTH = 380;
+function colgroup(widths: number[]): string {
+  return `<colgroup>${widths.map((w) => `<col style="--col-w: ${w}px;">`).join("")}</colgroup>`;
+}
+// Labels down a header column, a value cell next to each.
+function labelTable(labels: string[]): string {
+  const rows = labels.map((label) => `<tr><th scope="row">${label}</th>${EMPTY_CELL}</tr>`).join("");
+  return `<table data-header-col="">${colgroup([160, STAT_BLOCK_WIDTH - 160])}<tbody>${rows}</tbody></table>`;
+}
+// Labels across a header row, one empty row under them; even columns.
+function headerTable(labels: string[]): string {
+  const n = labels.length;
+  const widths = labels.map((_l, i) => Math.floor(STAT_BLOCK_WIDTH / n) + (i < STAT_BLOCK_WIDTH % n ? 1 : 0));
+  const head = labels.map((label) => `<th scope="col">${label}</th>`).join("");
+  return `<table>${colgroup(widths)}<tbody><tr>${head}</tr><tr>${labels.map(() => EMPTY_CELL).join("")}</tr></tbody></table>`;
+}
+
 type TemplateSpec = { title: string; html: string };
 
 // The "tour" template: a note that shows off every kind of formatting by describing itself.
@@ -149,11 +180,11 @@ function demoHtml(t: Record<string, string>): string {
       .join(" ")}</p>` +
     `<p>${pill(t.twoLines, "#f2780c")}</p>` +
     `<h4>${t.toggle}</h4><p>${t.toggleBody1}</p><p>${t.toggleBody2}</p>` +
-    `<p data-standalone="">${t.backToNormal}</p>` +
+    `<p data-exit="4">${t.backToNormal}</p>` +
     `<h4 data-collapsed="">${t.folded}</h4><p>${t.foldedBody}</p>` +
     `<h2 data-collapsed="">${t.headingFolds}</h2><p>${t.headingBody}</p>` +
     `<ul><li>${t.item1}</li><li>${t.item2}</li><li>${t.item3}</li></ul>` +
-    `<hr><p data-standalone=""><i>${t.deleteMe}</i></p>`
+    `<hr><p data-exit="1"><i>${t.deleteMe}</i></p>`
   );
 }
 
@@ -221,6 +252,66 @@ const DEFAULTS: Record<BuiltinTemplateId, Record<Language, TemplateSpec>> = {
         section("Rewards", EMPTY_LIST),
     },
   },
+  monster5e: {
+    es: {
+      title: "Monstruo (D&D 5e)",
+      html:
+        labelTable(["Tamaño y tipo", "Alineamiento", "Clase de Armadura", "Puntos de golpe", "Velocidad"]) +
+        headerTable(["FUE", "DES", "CON", "INT", "SAB", "CAR"]) +
+        labelTable(["Tiradas de salvación", "Habilidades", "Resistencias", "Inmunidades", "Sentidos", "Idiomas", "Desafío"]) +
+        section("Rasgos", EMPTY_PARAGRAPH) +
+        section("Acciones", EMPTY_PARAGRAPH) +
+        section("Acciones adicionales", EMPTY_PARAGRAPH) +
+        section("Reacciones", EMPTY_PARAGRAPH) +
+        section("Acciones legendarias", EMPTY_PARAGRAPH),
+    },
+    en: {
+      title: "Monster (D&D 5e)",
+      html:
+        labelTable(["Size and type", "Alignment", "Armor Class", "Hit Points", "Speed"]) +
+        headerTable(["STR", "DEX", "CON", "INT", "WIS", "CHA"]) +
+        labelTable(["Saving Throws", "Skills", "Resistances", "Immunities", "Senses", "Languages", "Challenge"]) +
+        section("Traits", EMPTY_PARAGRAPH) +
+        section("Actions", EMPTY_PARAGRAPH) +
+        section("Bonus Actions", EMPTY_PARAGRAPH) +
+        section("Reactions", EMPTY_PARAGRAPH) +
+        section("Legendary Actions", EMPTY_PARAGRAPH),
+    },
+  },
+  dhAdversary: {
+    es: {
+      title: "Adversario (Daggerheart)",
+      html:
+        labelTable(["Rango", "Tipo", "Descripción", "Motivos y tácticas"]) +
+        headerTable(["Dificultad", "Umbrales", "PG", "Estrés"]) +
+        headerTable(["ATQ", "Arma", "Alcance", "Daño"]) +
+        labelTable(["Experiencia"]) +
+        section("Características", EMPTY_PARAGRAPH),
+    },
+    en: {
+      title: "Adversary (Daggerheart)",
+      html:
+        labelTable(["Tier", "Type", "Description", "Motives &amp; Tactics"]) +
+        headerTable(["Difficulty", "Thresholds", "HP", "Stress"]) +
+        headerTable(["ATK", "Weapon", "Range", "Damage"]) +
+        labelTable(["Experience"]) +
+        section("Features", EMPTY_PARAGRAPH),
+    },
+  },
+  dhEnvironment: {
+    es: {
+      title: "Entorno (Daggerheart)",
+      html:
+        labelTable(["Rango", "Tipo", "Descripción", "Impulsos", "Posibles adversarios", "Dificultad"]) +
+        section("Características", EMPTY_PARAGRAPH),
+    },
+    en: {
+      title: "Environment (Daggerheart)",
+      html:
+        labelTable(["Tier", "Type", "Description", "Impulses", "Potential Adversaries", "Difficulty"]) +
+        section("Features", EMPTY_PARAGRAPH),
+    },
+  },
   sessionRecap: {
     es: {
       title: "Resumen de sesión",
@@ -268,7 +359,7 @@ const DEFAULTS: Record<BuiltinTemplateId, Record<Language, TemplateSpec>> = {
         toggle: "Esta línea es un desplegable: tocá su flecha para plegar lo de abajo",
         toggleBody1: "Todo lo que tiene sangría debajo de un desplegable se oculta al plegarlo.",
         toggleBody2: "Ideal para lo que no necesitás ver todo el tiempo.",
-        backToNormal: "Esta línea volvió a ser texto normal, así que queda visible siempre.",
+        backToNormal: "Esta línea salió del desplegable con «Reducir sangría» (o Shift+Tab), así que queda visible siempre.",
         folded: "Este desplegable ya está plegado. Dale, abrilo",
         foldedBody: "¡Hola! Encontraste el texto oculto. No hay nada más acá, perdón.",
         headingFolds: "Los títulos también se pliegan (este está plegado)",
@@ -305,7 +396,7 @@ const DEFAULTS: Record<BuiltinTemplateId, Record<Language, TemplateSpec>> = {
         toggle: "This line is a toggle \u2014 click its arrow to fold what's below",
         toggleBody1: "Everything indented under a toggle hides when you fold it.",
         toggleBody2: "Perfect for things you don't need to see all the time.",
-        backToNormal: "This line is back to normal text, so it stays visible either way.",
+        backToNormal: "This line left the toggle with “Decrease indent” (or Shift+Tab), so it stays visible either way.",
         folded: "This toggle is already folded. Go on, open it",
         foldedBody: "Hi! You found the hidden text. There's nothing else here, sorry.",
         headingFolds: "Headings fold too (this one is folded)",

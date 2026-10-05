@@ -18,6 +18,37 @@ export interface ToolbarStrings {
   quoteColor: string;
   quoteColorNone: string;
   divider: string;
+  table: string;
+  tableSize: (cols: number, rows: number) => string;
+  tableOptions: string;
+  tableRowAbove: string;
+  tableRowBelow: string;
+  tableColLeft: string;
+  tableColRight: string;
+  tableRowUp: string;
+  tableRowDown: string;
+  tableRowDrag: string;
+  tableColMoveLeft: string;
+  tableColMoveRight: string;
+  tableColDrag: string;
+  tableMove: string;
+  tableWidths: string;
+  tableDeleteRow: string;
+  tableDeleteCol: string;
+  tableMergeRight: string;
+  tableMergeDown: string;
+  tableSplit: string;
+  tableDistribute: string;
+  tableFitContent: string;
+  tableFitFrame: string;
+  tableColor: string;
+  tableColorCell: string;
+  tableColorRow: string;
+  tableColorCol: string;
+  tableColorNone: string;
+  tableHeaderRow: string;
+  tableHeaderCol: string;
+  tableDelete: string;
   bulletList: string;
   numberList: string;
   outdent: string;
@@ -186,8 +217,18 @@ const STRINGS: Record<Language, Strings> = {
       pill: "Píldora de color", pillNone: "Quitar color", textColor: "Color de texto", textColorNone: "Color por defecto",
       blockType: "Tipo de bloque", paragraph: "Texto normal", h1: "Título 1", h2: "Título 2", h3: "Título 3", toggle: "Desplegable",
       quoteColor: "Cita", quoteColorNone: "Quitar cita", divider: "Línea divisoria",
+      table: "Tabla", tableSize: (c, r) => `${c} ${c === 1 ? "columna" : "columnas"} × ${r} ${r === 1 ? "fila" : "filas"}`,
+      tableOptions: "Opciones de tabla", tableRowAbove: "Insertar fila arriba", tableRowBelow: "Insertar fila abajo",
+      tableColLeft: "Insertar columna a la izquierda", tableColRight: "Insertar columna a la derecha",
+      tableRowUp: "Mover fila arriba", tableRowDown: "Mover fila abajo", tableRowDrag: "Arrastrar para mover la fila",
+      tableColMoveLeft: "Mover columna a la izquierda", tableColMoveRight: "Mover columna a la derecha", tableColDrag: "Arrastrar para mover la columna",
+      tableMove: "Mover", tableWidths: "Ancho de columnas",
+      tableDeleteRow: "Eliminar fila", tableDeleteCol: "Eliminar columna",
+      tableMergeRight: "Combinar con la celda de la derecha", tableMergeDown: "Combinar con la celda de abajo", tableSplit: "Separar celda", tableDistribute: "Distribuir columnas", tableFitContent: "Ajustar al contenido", tableFitFrame: "Ajustar al marco",
+      tableColor: "Color de fondo", tableColorCell: "Celda", tableColorRow: "Fila", tableColorCol: "Columna", tableColorNone: "Sin color",
+      tableHeaderRow: "Fila de encabezado", tableHeaderCol: "Columna de encabezado", tableDelete: "Eliminar tabla",
       bulletList: "Lista", numberList: "Lista numerada", outdent: "Reducir sangría",
-      indent: "Aumentar sangría (sub-lista)", removeFormat: "Quitar formato",
+      indent: "Aumentar sangría", removeFormat: "Quitar formato",
     },
   },
   en: {
@@ -276,8 +317,18 @@ const STRINGS: Record<Language, Strings> = {
       pill: "Color pill", pillNone: "Remove color", textColor: "Text color", textColorNone: "Default color",
       blockType: "Block type", paragraph: "Normal text", h1: "Heading 1", h2: "Heading 2", h3: "Heading 3", toggle: "Toggle",
       quoteColor: "Quote", quoteColorNone: "Remove quote", divider: "Divider",
+      table: "Table", tableSize: (c, r) => `${c} ${c === 1 ? "column" : "columns"} × ${r} ${r === 1 ? "row" : "rows"}`,
+      tableOptions: "Table options", tableRowAbove: "Insert row above", tableRowBelow: "Insert row below",
+      tableColLeft: "Insert column left", tableColRight: "Insert column right",
+      tableRowUp: "Move row up", tableRowDown: "Move row down", tableRowDrag: "Drag to move the row",
+      tableColMoveLeft: "Move column left", tableColMoveRight: "Move column right", tableColDrag: "Drag to move the column",
+      tableMove: "Move", tableWidths: "Column widths",
+      tableDeleteRow: "Delete row", tableDeleteCol: "Delete column",
+      tableMergeRight: "Merge with cell on the right", tableMergeDown: "Merge with cell below", tableSplit: "Split cell", tableDistribute: "Distribute columns", tableFitContent: "Fit to content", tableFitFrame: "Fit to frame",
+      tableColor: "Background color", tableColorCell: "Cell", tableColorRow: "Row", tableColorCol: "Column", tableColorNone: "No color",
+      tableHeaderRow: "Header row", tableHeaderCol: "Header column", tableDelete: "Delete table",
       bulletList: "Bullet list", numberList: "Numbered list", outdent: "Decrease indent",
-      indent: "Increase indent (sub-list)", removeFormat: "Clear formatting",
+      indent: "Increase indent", removeFormat: "Clear formatting",
     },
   },
 };
