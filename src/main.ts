@@ -1,37 +1,41 @@
 import OBR from "@owlbear-rodeo/sdk";
 import "./style.css";
 import { getStrings } from "./i18n";
-import type { Language, Strings, ToolbarStrings } from "./i18n";
+import type { Language, Strings } from "./i18n";
 import { getNotes, setNotes, clearAllNotes, notesStorageBytes } from "./notes";
 import { sanitizeNoteHtml } from "./sanitizeHtml";
 import { escapeHtml, markdownToHtml, flattenToInline, stripHtml } from "./markdown";
 import { exportNote as exportNoteFile, exportAll, contentFromImportFile, isDuplicateTemplate } from "./importExport";
 import type { ExportFormat } from "./importExport";
 import { TRASH_ICON_PATH } from "./icons";
-import { swatchesHtml } from "./palette";
-import { buildTablePicker, createTableEditor } from "./tableEditor";
+import { createTableEditor } from "./tableEditor";
+import { renderToolbar, BLOCK_TYPES, BLOCK_ONLY_CMDS } from "./toolbar";
+import type { BlockTag } from "./toolbar";
+import { createHistory } from "./history";
+import { createSections } from "./sections";
 import type { Note } from "./notes";
 import { getPluginId } from "./pluginId";
 import { getTemplates, setTemplates, resolveTemplate, toCustomTemplate, missingBuiltins, newBuiltinTemplate } from "./templates";
 import type { Template } from "./templates";
-import { watchCloudTemplates, pushTemplate, deleteTemplateFromCloud } from "./templateSync";
 import { getLanguage, setLanguage, getAccentPref, setAccentPref } from "./prefs";
 import type { AccentPref } from "./prefs";
 import { ACCENTS, ACCENT_ORDER, watchTheme } from "./theme";
 import {
   cloudSyncAvailable,
+  startCloudSync,
+  prepareCloudSync,
   getCurrentUser,
-  onAuthChange,
   signInWithGoogle,
   signOutCloud,
   getSyncStatus,
-  onSyncStatusChange,
-  initCloudSyncContext,
   markNoteDirty,
   deleteNoteFromCloud,
   flushCloudSync,
   watchCloudNotes,
-} from "./cloudSync";
+  watchCloudTemplates,
+  pushTemplate,
+  deleteTemplateFromCloud,
+} from "./cloud";
 import type { User } from "firebase/auth";
 
 // ---------- state ----------
@@ -665,114 +669,6 @@ async function clearAllNotesWithConfirm() {
   updateStorageMeter();
 }
 
-// ---------- toolbar ----------
-interface ToolbarButtonSpec {
-  cmd?: string;
-  label?: string;
-  titleKey?: keyof ToolbarStrings;
-  style?: string;
-  value?: string;
-  picker?: "pill" | "textColor" | "quoteColor" | "block" | "table";
-  sep?: boolean;
-  svg?: string;
-}
-
-const TOOLBAR_BUTTONS: ToolbarButtonSpec[] = [
-  { cmd: "bold", label: "B", titleKey: "bold", style: "font-weight:700;" },
-  { cmd: "italic", label: "I", titleKey: "italic", style: "font-style:italic;" },
-  { cmd: "underline", label: "U", titleKey: "underline", style: "text-decoration:underline;" },
-  { cmd: "strikeThrough", label: "S", titleKey: "strike", style: "text-decoration:line-through;" },
-  { picker: "pill" },
-  { picker: "textColor" },
-  { sep: true },
-  { picker: "block" },
-  { picker: "quoteColor" },
-  { cmd: "divider", titleKey: "divider", svg: '<svg viewBox="0 0 16 16" fill="none"><path d="M2 8h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>' },
-  { picker: "table" },
-  { sep: true },
-  { cmd: "insertUnorderedList", titleKey: "bulletList", svg: '<svg viewBox="0 0 16 16" fill="none"><circle cx="2.3" cy="4" r="1.1" fill="currentColor"/><circle cx="2.3" cy="8" r="1.1" fill="currentColor"/><circle cx="2.3" cy="12" r="1.1" fill="currentColor"/><path d="M6 4h8M6 8h8M6 12h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' },
-  { cmd: "insertOrderedList", titleKey: "numberList", svg: '<svg viewBox="0 0 16 16" fill="none"><text x="0" y="5.2" font-size="4.2" fill="currentColor">1</text><text x="0" y="9.2" font-size="4.2" fill="currentColor">2</text><text x="0" y="13.2" font-size="4.2" fill="currentColor">3</text><path d="M6 4h8M6 8h8M6 12h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' },
-  { cmd: "outdent", titleKey: "outdent", svg: '<svg viewBox="0 0 16 16" fill="none"><path d="M5.5 4.5 2.5 8l3 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 3.5h5.5M8 8h5.5M8 12.5h5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' },
-  { cmd: "indent", titleKey: "indent", svg: '<svg viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5 5.5 8l-3 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 3.5h5.5M8 8h5.5M8 12.5h5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' },
-  { sep: true },
-  { cmd: "removeFormat", titleKey: "removeFormat", svg: '<svg viewBox="0 0 16 16" fill="none"><path d="M3 3h7M6.5 3v7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M2.5 13.5 13.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' },
-];
-
-function buildColorPicker(pickerId: string, btnId: string, swatchesId: string, title: string, iconSvg: string, noneTitle?: string): string {
-  const swatches = swatchesHtml(title, noneTitle);
-  return (
-    `<div class="pill-picker" id="${pickerId}">` +
-    `<button type="button" class="pill-picker-btn" id="${btnId}" title="${title}" aria-haspopup="true" aria-expanded="false">${iconSvg}</button>` +
-    `<div class="pill-swatches" id="${swatchesId}" hidden>${swatches}</div>` +
-    `</div>`
-  );
-}
-
-type BlockTag = "P" | "H1" | "H2" | "H3" | "H4" | "BLOCKQUOTE";
-// Block types offered by the block menu, in menu order. H4 is the "toggle" level: styled exactly
-// like a plain paragraph, so it reads as normal text that can collapse what follows it.
-const BLOCK_TYPES: { tag: BlockTag; key: "paragraph" | "h1" | "h2" | "h3" | "toggle"; short: string }[] = [
-  { tag: "P", key: "paragraph", short: "Aa" },
-  { tag: "H1", key: "h1", short: "H1" },
-  { tag: "H2", key: "h2", short: "H2" },
-  { tag: "H3", key: "h3", short: "H3" },
-  { tag: "H4", key: "toggle", short: "\u25b8" },
-];
-
-// Same dropdown shell as the color pickers (.pill-picker/.pill-swatches, so it shares their opening,
-// clamping and click-outside closing); its items are ordinary formatBlock toolbar buttons, handled by
-// the toolbar's own click listener.
-function buildBlockPicker(idPrefix: string): string {
-  const tb = strings().toolbar;
-  const items = BLOCK_TYPES.map(
-    (t) => `<button type="button" class="block-item block-item-${t.tag.toLowerCase()}" data-cmd="formatBlock" data-value="${t.tag}">${escapeHtml(tb[t.key])}</button>`
-  ).join("");
-  return (
-    `<div class="pill-picker block-picker" id="${idPrefix}BlockPicker">` +
-    `<button type="button" class="pill-picker-btn block-picker-btn" id="${idPrefix}BlockPickerBtn" title="${tb.blockType}" aria-haspopup="true" aria-expanded="false">` +
-    `<span class="block-picker-label" id="${idPrefix}BlockPickerLabel">Aa</span>` +
-    `<svg viewBox="0 0 16 16" fill="none"><path d="M4.5 6.5 8 10l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
-    `</button>` +
-    `<div class="pill-swatches block-menu" id="${idPrefix}BlockMenu" hidden>${items}</div>` +
-    `</div>`
-  );
-}
-
-// Toolbar commands that act on whole blocks, which table cells don't hold (cells take inline
-// formatting only: bold, color, pills, line breaks...).
-const BLOCK_ONLY_CMDS = new Set(["formatBlock", "insertUnorderedList", "insertOrderedList", "indent", "outdent"]);
-
-function renderToolbarButton(b: ToolbarButtonSpec, idPrefix: string): string {
-  if (b.sep) return '<span class="tb-sep"></span>';
-  const tb = strings().toolbar;
-  if (b.picker === "block") return buildBlockPicker(idPrefix);
-  if (b.picker === "table") return buildTablePicker(idPrefix, tb);
-  if (b.picker === "pill") {
-    return buildColorPicker(
-      idPrefix + "PillPicker", idPrefix + "PillPickerBtn", idPrefix + "PillSwatches", tb.pill,
-      '<svg viewBox="0 0 16 16" fill="none"><rect x="1.5" y="5.4" width="13" height="5.2" rx="2.6" stroke="currentColor" stroke-width="1.4"/></svg>',
-      tb.pillNone
-    );
-  }
-  if (b.picker === "textColor") {
-    return buildColorPicker(
-      idPrefix + "TextColorPicker", idPrefix + "TextColorPickerBtn", idPrefix + "TextColorSwatches", tb.textColor,
-      '<svg viewBox="0 0 16 16" fill="none"><text x="8" y="11.2" font-size="13" font-weight="700" text-anchor="middle" fill="currentColor">A</text><rect x="1.5" y="13" width="13" height="2.2" rx="1.1" fill="currentColor"/></svg>',
-      tb.textColorNone
-    );
-  }
-  if (b.picker === "quoteColor") {
-    return buildColorPicker(
-      idPrefix + "QuoteColorPicker", idPrefix + "QuoteColorPickerBtn", idPrefix + "QuoteColorSwatches", tb.quoteColor,
-      '<svg viewBox="0 0 16 16" fill="none"><rect x="3" y="2.5" width="2.3" height="11" rx="1.15" fill="currentColor"/><path d="M8.3 5h4M8.3 8h4M8.3 11h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
-      tb.quoteColorNone
-    );
-  }
-  const inner = b.svg || b.label || "";
-  const title = b.titleKey ? tb[b.titleKey] : "";
-  return `<button type="button" data-cmd="${b.cmd}" data-value="${b.value || ""}" title="${title}" style="${b.style || ""}">${inner}</button>`;
-}
-
 // ---------- rich-text editor ----------
 let editorSelectionListener: (() => void) | null = null;
 function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: string | null, onSaved: () => void) {
@@ -787,7 +683,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     return noteId ? notes.find((n) => n.id === noteId) : undefined;
   }
 
-  const toolbarHtml = `<div class="toolbar" id="${idPrefix}Toolbar">${TOOLBAR_BUTTONS.map((b) => renderToolbarButton(b, idPrefix)).join("")}</div>`;
+  const toolbarHtml = renderToolbar(idPrefix, s.toolbar);
 
   containerEl.innerHTML =
     toolbarHtml +
@@ -832,96 +728,23 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     document.execCommand("defaultParagraphSeparator", false, "p");
   });
 
-  // Our own undo/redo stack. contenteditable's native Ctrl+Z only tracks changes made via
-  // execCommand — our custom DOM surgery (dividers, list-clearing, color spans via Range) never
-  // gets recorded there, so mixing the two desyncs the native history and Ctrl+Z misbehaves
-  // (skips steps, half-undoes a divider, etc.). We snapshot innerHTML ourselves and fully own
-  // undo/redo instead of ever invoking the browser's built-in contenteditable undo.
-  // Each snapshot also remembers the selection at that moment, so undo/redo puts the caret back
-  // where the change happened instead of the browser's default (the very start of the note).
-  // Positions are stored as (top-level block index, character offset within that block): stable
-  // across the innerHTML round-trip, unlike DOM node references, which all get replaced.
-  // Inside a table, the offset counts from the start of the cell (sc/ec: the cell's index in the
-  // table, -1 elsewhere): counted from the table's start, an empty cell has no position at all, and
-  // the end of one cell is the same count as the start of the next.
-  interface CaretPos { sb: number; so: number; sc: number; eb: number; eo: number; ec: number }
-  interface Snapshot { html: string; caret: CaretPos | null }
-  const history: Snapshot[] = [];
-  const future: Snapshot[] = [];
-  let restoringHistory = false;
-
-  function pointToPos(node: Node, offset: number): [number, number, number] | null {
-    const blocks = Array.prototype.slice.call(surface.children) as HTMLElement[];
-    if (!blocks.length) return null;
-    if (node === surface) {
-      // offset counts child NODES (whitespace text between blocks included), not elements.
-      let index = 0;
-      for (let i = 0; i < offset && i < surface.childNodes.length; i++) {
-        if (surface.childNodes[i].nodeType === 1) index++;
-      }
-      return index >= blocks.length ? [blocks.length - 1, blockTextLength(blocks[blocks.length - 1]), -1] : [index, 0, -1];
-    }
-    const block = blockAt(node);
-    if (!block) return null;
-    const cell = tables.cellAt(node);
-    const r = document.createRange();
-    r.setStart(cell || block, 0);
-    r.setEnd(node, offset);
-    return [blocks.indexOf(block), r.toString().replace(/\u200b/g, "").length, cell ? tables.tableCells(block).indexOf(cell) : -1];
-  }
-  function blockTextLength(block: HTMLElement): number {
-    return (block.textContent || "").replace(/\u200b/g, "").length;
-  }
-  function posToPoint(blockIndex: number, offset: number, cellIndex: number): [Node, number] | null {
-    const blocks = surface.children;
-    if (!blocks.length) return null;
-    let block = blocks[Math.min(blockIndex, blocks.length - 1)] as HTMLElement;
-    if (cellIndex >= 0 && block.tagName === "TABLE") {
-      const cells = tables.tableCells(block);
-      if (cells.length) block = cells[Math.min(cellIndex, cells.length - 1)];
-    }
-    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-    let remaining = offset;
-    let last: Text | null = null;
-    for (let t = walker.nextNode() as Text | null; t; t = walker.nextNode() as Text | null) {
-      if (remaining <= t.data.length) return [t, remaining];
-      remaining -= t.data.length;
-      last = t;
-    }
-    return last ? [last, last.data.length] : [block, 0];
-  }
-  function captureCaret(): CaretPos | null {
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return null;
-    const r = sel.getRangeAt(0);
-    if (!surface.contains(r.startContainer) || !surface.contains(r.endContainer)) return null;
-    const start = pointToPos(r.startContainer, r.startOffset);
-    const end = pointToPos(r.endContainer, r.endOffset);
-    return start && end ? { sb: start[0], so: start[1], sc: start[2], eb: end[0], eo: end[1], ec: end[2] } : null;
-  }
-  function restoreCaret(caret: CaretPos | null) {
-    if (!caret) return;
-    const start = posToPoint(caret.sb, caret.so, caret.sc);
-    const end = posToPoint(caret.eb, caret.eo, caret.ec);
-    if (!start || !end) return;
-    const r = document.createRange();
-    r.setStart(start[0], start[1]);
-    r.setEnd(end[0], end[1]);
-    const sel = window.getSelection()!;
-    sel.removeAllRanges();
-    sel.addRange(r);
-  }
-  function snapshot(): Snapshot {
-    return { html: editorHtml(), caret: captureCaret() };
-  }
-  let typingBurstTimer: ReturnType<typeof setTimeout> | null = null;
-  let wordCountTimer: ReturnType<typeof setTimeout> | null = null;
-
+  // Undo/redo: see history.ts.
+  const undoStack = createHistory({
+    surface,
+    blockAt,
+    cellAt: tables.cellAt,
+    tableCells: tables.tableCells,
+    editorHtml,
+    onRestore: afterHistoryRestore,
+  });
   function pushHistory() {
-    if (restoringHistory) return;
-    history.push(snapshot());
-    if (history.length > 100) history.shift();
-    future.length = 0;
+    undoStack.push();
+  }
+  function undo() {
+    undoStack.undo();
+  }
+  function redo() {
+    undoStack.redo();
   }
   function afterHistoryRestore() {
     const n = currentNote();
@@ -931,26 +754,8 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     updateToolbarState();
     scheduleSave();
   }
-  function undo() {
-    if (!history.length) return;
-    future.push(snapshot());
-    const prev = history.pop()!;
-    restoringHistory = true;
-    surface.innerHTML = prev.html;
-    restoringHistory = false;
-    restoreCaret(prev.caret);
-    afterHistoryRestore();
-  }
-  function redo() {
-    if (!future.length) return;
-    history.push(snapshot());
-    const next = future.pop()!;
-    restoringHistory = true;
-    surface.innerHTML = next.html;
-    restoringHistory = false;
-    restoreCaret(next.caret);
-    afterHistoryRestore();
-  }
+  let typingBurstTimer: ReturnType<typeof setTimeout> | null = null;
+  let wordCountTimer: ReturnType<typeof setTimeout> | null = null;
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   // The "Guardado hace..." label previously flipped to its saved text the instant a keystroke
@@ -1834,7 +1639,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     removeEditorNoise();
   });
   function noteTyping() {
-    if (restoringHistory) return;
+    if (undoStack.restoring()) return;
     if (!typingBurstTimer) pushHistory();
     if (typingBurstTimer) clearTimeout(typingBurstTimer);
     typingBurstTimer = setTimeout(() => { typingBurstTimer = null; }, 700);
@@ -1927,7 +1732,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // switch, and each rebuild used to leave its predecessor's listener (and detached editor) behind.
   if (editorSelectionListener) document.removeEventListener("selectionchange", editorSelectionListener);
   editorSelectionListener = () => {
-    if (restoringHistory) return;
+    if (undoStack.restoring()) return;
     const sel = window.getSelection();
     if (pillAnchor && !(sel && sel.isCollapsed && sel.anchorNode === pillAnchor)) releasePillAnchor();
     // A click (or ←) landing just after a pill: move it onto the anchor so the caret shows outside.
@@ -1983,97 +1788,9 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   }).observe(surface, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["style", "color", "class"] });
   syncListMarkerColors();
 
-  // Collapsible sections: an H1-H4 with data-collapsed hides every following top-level block up to
-  // the next heading of the same or a higher level (H4, the "toggle" level, is styled as plain text).
-  // Blocks are only ever hidden, never moved or nested, so nothing else in the editor needs to know
-  // about sections. The chevron is the heading's ::before, drawn in the gutter to its left.
-  function headingLevel(el: Element): number {
-    const m = /^H([1-4])$/.exec(el.tagName);
-    return m ? Number(m[1]) : 0;
-  }
-  // Also gives every block a data-depth (how many sections enclose it), which indents it a step per
-  // level, so the indent shows which section each line belongs to — toggles look like plain text, so
-  // it's also what shows where one ends. A section ends at the next heading of the same or a higher
-  // level (so toggles can't nest), or early, at a line that leaves it (see exitLevel).
-  function setFlag(el: HTMLElement, name: string, on: boolean) {
-    if (on && !el.hasAttribute(name)) el.setAttribute(name, "");
-    else if (!on && el.hasAttribute(name)) el.removeAttribute(name);
-  }
-  // A line (paragraph, quote or heading) can leave the sections around it: data-exit="N" ends every
-  // open section of level N or deeper right before it, so it — and what follows — sits outside
-  // them (a heading then opens its own section there). Older notes mark a line that left its toggle
-  // as data-standalone: the same as data-exit="4".
-  const canExit = (el: Element) => /^(P|DIV|BLOCKQUOTE|H[1-4])$/.test(el.tagName);
-  function exitLevel(el: Element): number {
-    if (!canExit(el)) return 0;
-    const n = Number(el.getAttribute("data-exit"));
-    if (Number.isInteger(n) && n >= 1 && n <= 4) return n;
-    return el.hasAttribute("data-standalone") ? 4 : 0;
-  }
-  // Steps through the note's top-level blocks keeping the sections open at each one (their levels,
-  // outermost first; always increasing, since a heading first closes any section of its level or
-  // deeper). `visit` sees each block with the sections around it, before its own exit applies.
-  function walkSections(visit: (el: HTMLElement, around: number[]) => boolean | void) {
-    const open: number[] = [];
-    for (const el of Array.prototype.slice.call(surface.children) as HTMLElement[]) {
-      const level = headingLevel(el);
-      if (level) while (open.length && open[open.length - 1] >= level) open.pop();
-      if (visit(el, open.slice()) === false) return;
-      const exit = exitLevel(el);
-      if (exit) while (open.length && open[open.length - 1] >= exit) open.pop();
-      if (level) open.push(level);
-    }
-  }
-  function applyFolding() {
-    let hideUntil = 0;
-    walkSections((el, around) => {
-      const level = headingLevel(el);
-      const exit = exitLevel(el);
-      // The sections this block itself is in: those around it that its exit doesn't end.
-      const open = exit ? around.filter((l) => l < exit) : around;
-      if (hideUntil && ((level && level <= hideUntil) || (exit && exit <= hideUntil))) hideUntil = 0;
-      const depth = String(open.length);
-      if (open.length) {
-        if (el.getAttribute("data-depth") !== depth) el.setAttribute("data-depth", depth);
-      } else if (el.hasAttribute("data-depth")) {
-        el.removeAttribute("data-depth");
-      }
-      setFlag(el, "data-folded", !!hideUntil);
-      if (!hideUntil && level && el.hasAttribute("data-collapsed")) hideUntil = level;
-    });
-  }
-  // What Decrease indent (-1) / Increase indent (+1) on a line would set its exit to:
-  // out of the innermost section it's in, or back into the last one it left. Null when there's
-  // nothing to step out of or back into.
-  function sectionStep(block: HTMLElement, dir: -1 | 1): number | null {
-    if (!canExit(block) || block.parentElement !== surface) return null;
-    let around: number[] = [];
-    walkSections((el, a) => {
-      if (el !== block) return;
-      around = a;
-      return false;
-    });
-    const exit = exitLevel(block);
-    const inside = exit ? around.filter((l) => l < exit) : around;
-    if (dir < 0) return inside.length ? inside[inside.length - 1] : null;
-    if (inside.length === around.length) return null;
-    // Back into one more section: the exit now ends only the ones deeper than that (none: no exit).
-    return inside.length + 1 < around.length ? around[inside.length + 1] : 0;
-  }
-  function stepSection(block: HTMLElement, dir: -1 | 1): boolean {
-    const exit = sectionStep(block, dir);
-    if (exit === null) return false;
-    block.removeAttribute("data-standalone");
-    if (exit) block.setAttribute("data-exit", String(exit));
-    else block.removeAttribute("data-exit");
-    applyFolding();
-    return true;
-  }
-  // The top-level block the selection starts in.
-  function sel0Block(): HTMLElement | null {
-    const sel = window.getSelection();
-    return sel && sel.rangeCount ? blockAt(sel.getRangeAt(0).startContainer) : null;
-  }
+  // Collapsible sections: see sections.ts.
+  const sections = createSections({ surface, blockAt, onFoldChange: saveFoldState });
+  const { headingLevel, canExit, exitLevel, applyFolding, sectionStep, stepSection, sel0Block, toggleFold, guardFoldedMerge } = sections;
   // Every structural change (typing a new block, setBlockType's replacements, undo/redo, paste)
   // shows up as a childList change on the surface itself; applyFolding only touches attributes, so
   // it can't retrigger this.
@@ -2087,21 +1804,6 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // Collapsing/expanding is saved locally only: it neither bumps the note's "edited" time (which
   // would reorder the note list) nor marks it for cloud sync. The state rides along to the cloud
   // with the next real edit of the note.
-  function toggleFold(heading: HTMLElement) {
-    if (heading.hasAttribute("data-collapsed")) heading.removeAttribute("data-collapsed");
-    else heading.setAttribute("data-collapsed", "");
-    applyFolding();
-    const sel = window.getSelection();
-    const caretBlock = sel && sel.rangeCount ? blockAt(sel.getRangeAt(0).startContainer) : null;
-    if (caretBlock && caretBlock.hasAttribute("data-folded")) {
-      const r = document.createRange();
-      r.selectNodeContents(heading);
-      r.collapse(false);
-      sel!.removeAllRanges();
-      sel!.addRange(r);
-    }
-    saveFoldState();
-  }
   function saveFoldState() {
     const n = currentNote();
     if (n) {
@@ -2109,51 +1811,6 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       void persist();
     }
   }
-  // Expands whatever collapsed heading(s) hide `hidden` (a data-folded block): the owner is the
-  // nearest preceding block that isn't itself hidden; a nested collapsed heading inside it may
-  // still hide `hidden` after that, hence the loop.
-  function unfoldAround(hidden: HTMLElement) {
-    while (hidden.hasAttribute("data-folded")) {
-      let owner = hidden.previousElementSibling as HTMLElement | null;
-      while (owner && owner.hasAttribute("data-folded")) owner = owner.previousElementSibling as HTMLElement | null;
-      if (!owner || !owner.hasAttribute("data-collapsed")) break;
-      owner.removeAttribute("data-collapsed");
-      applyFolding();
-    }
-    saveFoldState();
-  }
-  // Backspace at the start of the block right after a collapsed section (or Delete at the end of a
-  // collapsed heading) made Chrome merge across the hidden blocks, silently deleting all of them.
-  // Instead, that key press just expands the section, so the merge — if still wanted, with a second
-  // press — happens with its content in plain sight.
-  function guardFoldedMerge(ev: KeyboardEvent): boolean {
-    if (ev.key !== "Backspace" && ev.key !== "Delete") return false;
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
-    const r = sel.getRangeAt(0);
-    const block = blockAt(r.startContainer);
-    if (!block) return false;
-    const edge = document.createRange();
-    edge.selectNodeContents(block);
-    if (ev.key === "Backspace") edge.setEnd(r.startContainer, r.startOffset);
-    else edge.setStart(r.startContainer, r.startOffset);
-    if (edge.toString() !== "") return false;
-    const neighbor = (ev.key === "Backspace" ? block.previousElementSibling : block.nextElementSibling) as HTMLElement | null;
-    if (!neighbor || !neighbor.hasAttribute("data-folded")) return false;
-    ev.preventDefault();
-    unfoldAround(neighbor);
-    return true;
-  }
-  surface.addEventListener("mousedown", (ev) => {
-    const target = ev.target as HTMLElement;
-    const heading = target && target.closest ? (target.closest("h1, h2, h3, h4") as HTMLElement | null) : null;
-    if (!heading || heading.parentElement !== surface) return;
-    // Only the chevron itself, which sits left of the heading's own box.
-    if (ev.clientX >= heading.getBoundingClientRect().left) return;
-    ev.preventDefault();
-    toggleFold(heading);
-  });
-
   // The editor must always hold at least one real block. Backspace/Delete in a note whose only block
   // is empty made Chrome remove that block entirely, leaving typed text loose in the surface (outside
   // any <p>) and Enter falling back to a bare <br> — the shorter line gap. Two guards: those keys are
@@ -2476,7 +2133,10 @@ function openSettings() {
   const cloudSection = document.getElementById("cloudSyncSection");
   if (cloudSection) {
     cloudSection.hidden = !cloudSyncAvailable();
-    if (cloudSyncAvailable()) updateCloudAccountUI(getCurrentUser());
+    if (cloudSyncAvailable()) {
+      updateCloudAccountUI(getCurrentUser());
+      prepareCloudSync();
+    }
   }
   settingsOverlay.hidden = false;
 }
@@ -2779,9 +2439,7 @@ async function boot() {
 
   if (cloudSyncAvailable()) {
     currentRoomIdForCloud = OBR.room.id;
-    initCloudSyncContext(currentRoomIdForCloud, (id) => notes.find((n) => n.id === id));
-    onSyncStatusChange(updateSyncIndicator);
-    onAuthChange(applyCloudAuthState);
+    startCloudSync(currentRoomIdForCloud, (id) => notes.find((n) => n.id === id), updateSyncIndicator, applyCloudAuthState);
   }
 
   OBR.player.onChange((player) => {

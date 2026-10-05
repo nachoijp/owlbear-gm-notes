@@ -1,6 +1,5 @@
 // Export (JSON or Markdown, one file or a zip) and import (JSON, Markdown, zips of either) of notes
 // and templates. Works on plain values; main.ts owns the state and decides what to do with the result.
-import JSZip from "jszip";
 import { sanitizeNote } from "./notes";
 import type { Note } from "./notes";
 import { sanitizeTemplate } from "./templates";
@@ -102,6 +101,8 @@ export async function exportAll(notes: Note[], templates: Template[], format: Ex
     exportNote(notes[0], format, opts.untitled);
     return;
   }
+  // JSZip only loads when a ZIP is actually made or opened.
+  const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   const ext = format === "json" ? ".json" : ".md";
   function addUnique(usedNames: Set<string>, folder: string, title: string, content: string) {
@@ -181,6 +182,7 @@ async function importFromJsonText(json: string, inTemplateFolder: boolean, into:
 export async function contentFromImportFile(file: File, untitled: string): Promise<ImportedContent> {
   const result: ImportedContent = { notes: [], templates: [] };
   if (/\.zip$/i.test(file.name)) {
+    const { default: JSZip } = await import("jszip");
     const zip = await JSZip.loadAsync(file);
     for (const entry of Object.values(zip.files)) {
       if (entry.dir) continue;
