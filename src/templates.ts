@@ -164,7 +164,34 @@ function pill(text: string, color: string): string {
 function colored(text: string, color: string): string {
   return `<span style="color: ${color};">${text}</span>`;
 }
-function demoHtml(t: Record<string, string>): string {
+// The tour's table explains itself, row by row: [header, text]. The "Colors" row is painted, the
+// "Merging" text spans the row below it (whose text is never used), and the columns have set widths.
+// The wide table is wider than the panel, to show sideways scrolling and the cut-off edge.
+type DemoTables = { tour: string[][]; wide: string[][] };
+function demoTables(t: DemoTables): { tour: string; wide: string } {
+  const [head, ...rows] = t.tour;
+  const body = rows
+    .map(([label, text], i) => {
+      const th = `<th scope="row">${label}</th>`;
+      if (i === 2) return `<tr>${th}<td style="--cell-c: #4caf72;">${text}</td></tr>`;
+      if (i === 3) return `<tr>${th}<td rowspan="2" style="--cell-c: #7c5cff;">${text}</td></tr>`;
+      if (i === 4) return `<tr>${th}</tr>`;
+      return `<tr>${th}<td>${text}</td></tr>`;
+    })
+    .join("");
+  const tour =
+    `<table data-header-col="">${colgroup([130, 250])}<tbody>` +
+    `<tr>${head.map((h) => `<th scope="col">${h}</th>`).join("")}</tr>${body}</tbody></table>`;
+  const [wideHead, wideRow] = t.wide;
+  const wide =
+    `<table>${colgroup([150, 150, 150, 150])}<tbody>` +
+    `<tr>${wideHead.map((h) => `<th scope="col">${h}</th>`).join("")}</tr>` +
+    `<tr>${wideRow.map((c, i) => (i === 3 ? `<td style="--cell-c: #d6b214;">${c}</td>` : `<td>${c}</td>`)).join("")}</tr>` +
+    `</tbody></table>`;
+  return { tour, wide };
+}
+function demoHtml(t: Record<string, string>, tables: DemoTables): string {
+  const { tour, wide } = demoTables(tables);
   return (
     `<h1>${t.h1}</h1><h2>${t.h2}</h2><h3>${t.h3}</h3>` +
     `<blockquote>${t.quote}</blockquote>` +
@@ -179,11 +206,14 @@ function demoHtml(t: Record<string, string>): string {
       .map((w, i) => pill(w, ["#4caf72", "#9c6b3e", "#3f8ce0", "#d6b214", "#e05a86", "#7c5cff", "#b8b8c0", "#8b8994"][i % 8]))
       .join(" ")}</p>` +
     `<p>${pill(t.twoLines, "#f2780c")}</p>` +
+    `<h2>${t.tablesHeading}</h2><p>${t.tableIntro}</p>${tour}<p>${t.tableMenu}</p>${wide}` +
+    `<h2>${t.togglesHeading}</h2>` +
     `<h4>${t.toggle}</h4><p>${t.toggleBody1}</p><p>${t.toggleBody2}</p>` +
     `<p data-exit="4">${t.backToNormal}</p>` +
     `<h4 data-collapsed="">${t.folded}</h4><p>${t.foldedBody}</p>` +
     `<h2 data-collapsed="">${t.headingFolds}</h2><p>${t.headingBody}</p>` +
-    `<ul><li>${t.item1}</li><li>${t.item2}</li><li>${t.item3}</li></ul>` +
+    `<ul><li>${t.item1}</li><li>${t.item2}</li><li>${t.item3}</li><li>${t.item4}</li></ul>` +
+    `<p data-exit="2">${t.stepOut}</p>` +
     `<hr><p data-exit="1"><i>${t.deleteMe}</i></p>`
   );
 }
@@ -356,18 +386,39 @@ const DEFAULTS: Record<BuiltinTemplateId, Record<Language, TemplateSpec>> = {
         textWord: "de color",
         pills: "Y crear píldoras de muchos colores y grises",
         twoLines: "Las píldoras pueden<br>ocupar dos líneas",
+        tablesHeading: "¡Tablas!",
+        tableIntro: "Acá hay una que se explica sola:",
+        tableMenu: "Todo lo demás está en el menú de tabla: poné el cursor en una celda y tocá el botón de tabla de la barra.",
+        togglesHeading: "Desplegables",
         toggle: "Esta línea es un desplegable: tocá su flecha para plegar lo de abajo",
         toggleBody1: "Todo lo que tiene sangría debajo de un desplegable se oculta al plegarlo.",
         toggleBody2: "Ideal para lo que no necesitás ver todo el tiempo.",
-        backToNormal: "Esta línea salió del desplegable con «Reducir sangría» (o Shift+Tab), así que queda visible siempre.",
+        backToNormal: "Esta línea salió del desplegable con «Reducir sangría» (o Shift+Tab), así que queda visible siempre. «Aumentar sangría» (o Tab) la devuelve.",
         folded: "Este desplegable ya está plegado. Dale, abrilo",
         foldedBody: "¡Hola! Encontraste el texto oculto. No hay nada más acá, perdón.",
         headingFolds: "Los títulos también se pliegan (este está plegado)",
         headingBody: "Una sección entera, guardada hasta que la necesites.",
         item1: "Listas",
         item2: "Citas",
-        item3: "Lo que quieras, en realidad",
+        item3: "Tablas, incluso",
+        item4: "Lo que quieras, en realidad",
+        stepOut: "Y esta línea salió de esa sección, un Shift+Tab por nivel.",
         deleteMe: "Esta es una plantilla de ejemplo. Si no la necesitás, podés borrarla desde el menú +.",
+      }, {
+        tour: [
+          ["Esto es una tabla", "Y lo sabe"],
+          ["Columna de encabezado", "La primera fila y la primera columna pueden ser encabezados. Esta tabla tiene ambas"],
+          ["Formato", `Las celdas aceptan <b>negrita</b>, <i>cursiva</i>, ${colored("color", "#e05a86")} y ${pill("píldoras", "#3f8ce0")}`],
+          ["Colores", "Pintá una celda, una fila entera o una columna entera"],
+          ["Combinar", "Esta celda se tragó a la de abajo. Separala cuando quieras"],
+          ["(en serio)", ""],
+          ["Mover", "Agarrá los puntos a la izquierda de una fila, o arriba de una columna, y arrastrala a otro lado"],
+          ["Anchos", "Arrastrá el borde de una columna. Con doble clic, la columna se ajusta a su texto"],
+        ],
+        wide: [
+          ["Esta tabla es ancha", "Demasiado ancha para el panel", "Así que se desplaza de costado", "¡Llegaste!"],
+          ["¿Ves el borde derecho?", "Parece cortado", "Porque hay más", "Esquinas redondeadas otra vez"],
+        ],
       }),
     },
     en: {
@@ -393,18 +444,39 @@ const DEFAULTS: Record<BuiltinTemplateId, Record<Language, TemplateSpec>> = {
         textWord: "text",
         pills: "And make pills in multiple colors and grays",
         twoLines: "Pills can even<br>span two lines",
+        tablesHeading: "Tables!",
+        tableIntro: "Here’s one explaining itself:",
+        tableMenu: "Everything else lives in the table menu: put the caret in a cell and click the table button in the toolbar.",
+        togglesHeading: "Toggles",
         toggle: "This line is a toggle \u2014 click its arrow to fold what's below",
         toggleBody1: "Everything indented under a toggle hides when you fold it.",
         toggleBody2: "Perfect for things you don't need to see all the time.",
-        backToNormal: "This line left the toggle with “Decrease indent” (or Shift+Tab), so it stays visible either way.",
+        backToNormal: "This line left the toggle with “Decrease indent” (or Shift+Tab), so it stays visible either way. “Increase indent” (or Tab) puts it back.",
         folded: "This toggle is already folded. Go on, open it",
         foldedBody: "Hi! You found the hidden text. There's nothing else here, sorry.",
         headingFolds: "Headings fold too (this one is folded)",
         headingBody: "A whole section, tucked away until you need it.",
         item1: "Lists",
         item2: "Quotes",
-        item3: "Anything, really",
+        item3: "Tables, even",
+        item4: "Anything, really",
+        stepOut: "And this line stepped out of that section, one Shift+Tab per level.",
         deleteMe: "This is an example template. If you don't need it, you can delete it from the + menu.",
+      }, {
+        tour: [
+          ["This is a table", "And it knows it"],
+          ["Header column", "The first row and column can be headers. This table has both"],
+          ["Formatting", `Cells take <b>bold</b>, <i>italic</i>, ${colored("color", "#e05a86")} and ${pill("pills", "#3f8ce0")}`],
+          ["Colors", "Paint a cell, a whole row or a whole column"],
+          ["Merging", "This cell swallowed the one below it. Split it back whenever you want"],
+          ["(really)", ""],
+          ["Moving", "Grab the dots left of a row, or above a column, and drag it somewhere else"],
+          ["Widths", "Drag a column’s border. Double-click it and the column fits its text"],
+        ],
+        wide: [
+          ["This table is wide", "Too wide for the panel", "So it scrolls sideways", "You made it!"],
+          ["Notice the right edge?", "It looks cut off", "Because there’s more", "Rounded corners again"],
+        ],
       }),
     },
   },
