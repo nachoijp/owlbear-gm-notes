@@ -245,11 +245,22 @@ body{
   background:var(--bg-solid); border:1px solid var(--divider); border-radius:8px;
   padding:6px; display:flex; flex-wrap:nowrap; gap:5px; box-shadow:0 14px 30px -10px rgba(0,0,0,.5);
 }
-.pill-swatches .pill-swatch{ width:16px; height:16px; border-radius:50%; border:2px solid transparent; padding:0; cursor:pointer; background:var(--sw); box-shadow:inset 0 0 0 1px rgba(128,128,128,.4); }
-.pill-swatches .pill-swatch:hover{ border-color:var(--text-primary); }
-.pill-swatches .pill-swatch-none{ background:transparent; border:1px dashed var(--text-disabled); display:flex; align-items:center; justify-content:center; color:var(--text-disabled); }
-.pill-swatches .pill-swatch-none:hover{ color:var(--text-primary); border-color:var(--text-primary); }
-.pill-swatches .pill-swatch-none svg{ width:9px; height:9px; }
+/* A solid circle with a thin ring in the theme's text color (light on dark, dark on light), so the
+   colors closest to the menu's own background (black on dark, white on light) still stand out.
+   Hovered or selected, a second ring sits around it with a gap. */
+.pill-swatches .pill-swatch{
+  --sw-ring:color-mix(in srgb, var(--text-primary) 30%, transparent);
+  width:16px; height:16px; border-radius:50%; border:0; padding:0; cursor:pointer; background:var(--sw);
+  box-shadow:0 0 0 1px var(--sw-ring);
+}
+.pill-swatches.color-swatches{ display:grid; grid-template-columns:repeat(7, 16px); }
+.pill-swatches .pill-swatch:hover, .pill-swatches .pill-swatch.on{
+  box-shadow:0 0 0 1px var(--sw-ring), 0 0 0 1.5px var(--bg-solid), 0 0 0 2.5px var(--text-primary);
+}
+/* "No color": an empty circle with the same ring, crossed by a slash. */
+.pill-swatches .pill-swatch-none{ background:transparent; display:flex; align-items:center; justify-content:center; color:var(--text-secondary); }
+.pill-swatches .pill-swatch-none:hover, .pill-swatches .pill-swatch-none.on{ color:var(--text-primary); }
+.pill-swatches .pill-swatch-none svg{ width:16px; height:16px; }
 
 .title-row{
   flex:0 0 auto; padding:8px 16px 6px; background:transparent;
@@ -552,4 +563,3 @@ body{
 .toolbar .table-color-scope button + button{ border-left:1px solid var(--divider); }
 .toolbar .table-color-scope button[aria-pressed="true"]{ background:color-mix(in srgb, var(--primary-main) 20%, transparent); color:var(--primary-light); }
 .table-color-swatches{ display:grid; grid-template-columns:repeat(7, 16px); gap:5px; justify-content:space-between; }
-.pill-swatches .table-color-swatches .pill-swatch.on{ border-color:var(--text-primary); }

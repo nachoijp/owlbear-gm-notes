@@ -42,7 +42,7 @@ function buildColorPicker(pickerId: string, btnId: string, swatchesId: string, t
   return (
     `<div class="pill-picker" id="${pickerId}">` +
     `<button type="button" class="pill-picker-btn" id="${btnId}" title="${title}" aria-haspopup="true" aria-expanded="false">${iconSvg}</button>` +
-    `<div class="pill-swatches" id="${swatchesId}" hidden>${swatches}</div>` +
+    `<div class="pill-swatches color-swatches" id="${swatchesId}" hidden>${swatches}</div>` +
     `</div>`
   );
 }

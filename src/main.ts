@@ -853,7 +853,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     updateToolbarState();
   });
 
-  function wireDropdown(btnId: string, swatchesId: string) {
+  function wireDropdown(btnId: string, swatchesId: string, onOpen?: (sw: HTMLElement) => void) {
     const btn = document.getElementById(btnId);
     const sw = document.getElementById(swatchesId);
     if (!btn || !sw) return;
@@ -865,6 +865,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       sw.hidden = !willOpen;
       btn.setAttribute("aria-expanded", String(willOpen));
       if (willOpen) {
+        onOpen?.(sw);
         // Swatches open left-anchored to their button by default (CSS left:0), which runs the
         // dropdown off the panel's right edge once it's narrow enough that a button sitting further
         // right in the toolbar doesn't have ~260px of room left. Simply flipping to right-anchored
@@ -890,11 +891,27 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       }
     });
   }
-  function wireColorPicker(btnId: string, swatchesId: string, onColor: (hex: string) => void, onNone?: () => void) {
+  // `current` is the color applied where the selection starts: a swatch's color, "" for none, or null
+  // when it's neither (a color from outside the palette). The menu marks that swatch when it opens,
+  // like the table menu does.
+  function wireColorPicker(
+    btnId: string,
+    swatchesId: string,
+    current: () => string | null,
+    onColor: (hex: string) => void,
+    onNone?: () => void
+  ) {
     const btn = document.getElementById(btnId);
     const sw = document.getElementById(swatchesId);
     if (!btn || !sw) return;
-    wireDropdown(btnId, swatchesId);
+    wireDropdown(btnId, swatchesId, () => {
+      const color = current();
+      const shown = color ? cssColor(color) : color;
+      sw.querySelectorAll<HTMLElement>("button[data-color]").forEach((b) => {
+        const c = b.dataset.color!;
+        b.classList.toggle("on", shown !== null && (c ? cssColor(c) : "") === shown);
+      });
+    });
     sw.addEventListener("click", (ev) => {
       const b = (ev.target as HTMLElement).closest("button[data-color]") as HTMLElement | null;
       if (!b) return;
@@ -913,9 +930,39 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   }
 
   wireDropdown(idPrefix + "BlockPickerBtn", idPrefix + "BlockMenu");
-  wireColorPicker(idPrefix + "PillPickerBtn", idPrefix + "PillSwatches", applyPillColor, removePillAtSelection);
-  wireColorPicker(idPrefix + "TextColorPickerBtn", idPrefix + "TextColorSwatches", applyTextColor, resetTextColor);
-  wireColorPicker(idPrefix + "QuoteColorPickerBtn", idPrefix + "QuoteColorSwatches", applyQuoteColor, removeQuote);
+  wireColorPicker(idPrefix + "PillPickerBtn", idPrefix + "PillSwatches", pillColorAtSelection, applyPillColor, removePillAtSelection);
+  wireColorPicker(idPrefix + "TextColorPickerBtn", idPrefix + "TextColorSwatches", textColorAtSelection, applyTextColor, resetTextColor);
+  wireColorPicker(idPrefix + "QuoteColorPickerBtn", idPrefix + "QuoteColorSwatches", quoteColorAtSelection, applyQuoteColor, removeQuote);
+  // The color each picker would mark (see wireColorPicker).
+  function pillColorAtSelection(): string | null {
+    const pill = getPillAtSelection();
+    return pill ? pill.style.getPropertyValue("--pill-c").trim() || null : "";
+  }
+  function quoteColorAtSelection(): string | null {
+    const quote = getQuoteAtSelection();
+    return quote ? quote.style.getPropertyValue("--quote-c").trim() || null : "";
+  }
+  // The nearest color set on the text (by the text color picker: a span's own color), up to its
+  // block. Text reset to the theme's color counts as none; a pill's own text color, as neither.
+  function textColorAtSelection(): string | null {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return "";
+    const block = blockAt(sel.getRangeAt(0).startContainer);
+    for (let n: Node | null = sel.getRangeAt(0).startContainer; n && n !== block && n !== surface; n = n.parentNode) {
+      // A color picked with nothing selected comes from execCommand("foreColor"): a <font color>.
+      const color = n.nodeType === 1 ? (n as HTMLElement).style.color || (n as HTMLElement).getAttribute("color") || "" : "";
+      if (!color) continue;
+      if (color === "var(--text-primary)") return "";
+      return color.startsWith("var(") ? null : color;
+    }
+    return "";
+  }
+  // A color as the browser writes it back (rgb(...)), so colors written as hex compare equal.
+  function cssColor(color: string): string {
+    const probe = document.createElement("span");
+    probe.style.color = color;
+    return probe.style.color;
+  }
   // Before wireDropdown: the menu's content (size grid or options) must be set before it measures
   // the menu to place it.
   tables.wirePicker();
