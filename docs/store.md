@@ -24,18 +24,31 @@ visibility toggle, nothing for them to see or edit.
 2. Create a note with the **+** button — blank, or from a template — and
    write using the toolbar or by pasting text. Markdown syntax (headings,
    bold/italic, lists, quotes, dividers) is recognized automatically and
-   converted to real formatting.
+   converted to real formatting, and copying between notes keeps all your
+   formatting.
 3. Switch between notes and search them from the dropdown at the top.
 
 ![Switching between notes, with search](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-notes.png)
 
+## Collapsible sections
+
+Fold any heading to hide everything under it, so long notes stay easy to
+scan and you open only the part you need at the table. **Toggles** look
+like normal text but fold the lines below them — perfect for secrets,
+stat blocks, or read-aloud text. A small indent shows which section each
+line belongs to.
+
+![A toggle open, another folded, and a folded heading](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-collapsible.png)
+
 ## Templates
 
 Start recurring notes with the right sections already in place. GM Notes
-comes with four templates — NPC, Location, Session prep, and Session
-recap — in your chosen language, and you can save any note of your own as
+comes with ready-made templates — NPC, Location, Session prep, Session
+recap, and a quick tour of every formatting option — in your chosen language, and you can save any note of your own as
 a template from the notes list. Templates are available in every room,
 and can be renamed or deleted from the **+** menu.
+
+![Starting a note from a template](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-templates.png)
 
 ## Notes live on your device — with optional cloud sync
 
