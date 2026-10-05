@@ -3,6 +3,7 @@ import localforage from "localforage";
 import { cloudContext, reportCloudSyncError } from "./cloudSync";
 import { getPluginId } from "./pluginId";
 import { sanitizeTemplate } from "./templates";
+import { sanitizeNoteHtml } from "./sanitizeHtml";
 import type { Template } from "./templates";
 
 // Cloud copy of the GM's templates, under the signed-in account at users/{uid}/templates/{id} —
@@ -72,7 +73,8 @@ export async function deleteTemplateFromCloud(templateId: string): Promise<void>
 }
 
 function templateFromDoc(id: string, data: unknown): Template | undefined {
-  return sanitizeTemplate({ ...(data as object), id });
+  const template = sanitizeTemplate({ ...(data as object), id });
+  return template ? { ...template, html: sanitizeNoteHtml(template.html) } : undefined;
 }
 
 /** Applies one template arriving from the cloud: newest wins by `updatedAt`, and a built-in replaces

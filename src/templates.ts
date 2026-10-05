@@ -4,8 +4,11 @@ import { sanitizeNote } from "./notes";
 import type { Note } from "./notes";
 import type { Language } from "./i18n";
 
-export type BuiltinTemplateId = "npc" | "location" | "sessionPrep" | "sessionRecap";
-const BUILTIN_IDS: BuiltinTemplateId[] = ["npc", "location", "sessionPrep", "sessionRecap"];
+export type BuiltinTemplateId = "npc" | "location" | "sessionPrep" | "sessionRecap" | "demo";
+const BUILTIN_IDS: BuiltinTemplateId[] = ["npc", "location", "sessionPrep", "sessionRecap", "demo"];
+// "demo" (the formatting tour) only reaches new installs, seeded with the rest: adding it to existing
+// template lists would let a device that seeds it later re-push one the GM already deleted on
+// another device, since cloud sync keeps no record of deleted built-ins.
 
 // A template is a saved note body to start new notes from — the same shape as a Note, plus an
 // optional `builtin` id. A built-in template stores no text of its own: its title and body come from
@@ -75,7 +78,7 @@ export function toCustomTemplate(template: Template, language: Language): void {
   delete template.builtin;
 }
 
-/** Returns the stored templates. The very first time (nothing stored yet), seeds the four
+/** Returns the stored templates. The very first time (nothing stored yet), seeds the
  * built-ins — after that an empty list stays empty (deleting every template doesn't bring the
  * built-ins back). */
 export async function getTemplates(): Promise<Template[]> {
@@ -90,6 +93,18 @@ export async function getTemplates(): Promise<Template[]> {
   const seeded = defaultTemplates();
   await store.setItem(TEMPLATES_KEY, seeded);
   return seeded;
+}
+
+/** Built-ins not currently in the list (deleted at some point, or added in a later version). */
+export function missingBuiltins(templates: Template[]): BuiltinTemplateId[] {
+  const present = new Set(templates.map((t) => t.builtin).filter(Boolean));
+  return BUILTIN_IDS.filter((id) => !present.has(id));
+}
+
+/** A fresh copy of a built-in, for "restore default templates". */
+export function newBuiltinTemplate(builtin: BuiltinTemplateId): Template {
+  const now = Date.now();
+  return { id: `t${now}-${builtin}`, title: "", html: "", updatedAt: now, builtin };
 }
 
 export async function setTemplates(templates: Template[]): Promise<void> {
@@ -110,6 +125,38 @@ const EMPTY_LIST = "<ul><li><br></li></ul>";
 const EMPTY_PARAGRAPH = "<p><br></p>";
 
 type TemplateSpec = { title: string; html: string };
+
+// The "tour" template: a note that shows off every kind of formatting by describing itself.
+function pill(text: string, color: string): string {
+  return `<span class="note-pill" style="--pill-c: ${color};">${text}</span>`;
+}
+function colored(text: string, color: string): string {
+  return `<span style="color: ${color};">${text}</span>`;
+}
+function demoHtml(t: Record<string, string>): string {
+  return (
+    `<h1>${t.h1}</h1><h2>${t.h2}</h2><h3>${t.h3}</h3>` +
+    `<blockquote>${t.quote}</blockquote>` +
+    `<blockquote style="--quote-c: #f2780c;">${t.quote2}</blockquote>` +
+    `<hr><p>${t.divider}</p>` +
+    `<ul><li>${t.list}<ul><li>${t.sublist}<ul><li>${t.onItGoes}</li></ul></li></ul></li>` +
+    `<li>${colored(t.colorStart, "#3f8ce0")}${t.colorEnd}</li></ul>` +
+    `<ol><li>${t.numbered}<ol><li>${t.letters}<ol><li>${t.roman}</li></ol></li></ol></li><li>${t.count}</li></ol>` +
+    `<p>${t.formatting.replace("{colored}", colored(t.coloredWord, "#7c5cff")).replace("{text}", colored(t.textWord, "#e05a86"))}</p>` +
+    `<p>${t.pills
+      .split(" ")
+      .map((w, i) => pill(w, ["#4caf72", "#9c6b3e", "#3f8ce0", "#d6b214", "#e05a86", "#7c5cff", "#b8b8c0", "#8b8994"][i % 8]))
+      .join(" ")}</p>` +
+    `<p>${pill(t.twoLines, "#f2780c")}</p>` +
+    `<h4>${t.toggle}</h4><p>${t.toggleBody1}</p><p>${t.toggleBody2}</p>` +
+    `<p data-standalone="">${t.backToNormal}</p>` +
+    `<h4 data-collapsed="">${t.folded}</h4><p>${t.foldedBody}</p>` +
+    `<h2 data-collapsed="">${t.headingFolds}</h2><p>${t.headingBody}</p>` +
+    `<ul><li>${t.item1}</li><li>${t.item2}</li><li>${t.item3}</li></ul>` +
+    `<hr><p data-standalone=""><i>${t.deleteMe}</i></p>`
+  );
+}
+
 
 const DEFAULTS: Record<BuiltinTemplateId, Record<Language, TemplateSpec>> = {
   npc: {
@@ -192,6 +239,82 @@ const DEFAULTS: Record<BuiltinTemplateId, Record<Language, TemplateSpec>> = {
         section("Key decisions", EMPTY_LIST) +
         section("Loot and rewards", EMPTY_LIST) +
         section("Open threads", EMPTY_LIST),
+    },
+  },
+  demo: {
+    es: {
+      title: "Esto es una nota",
+      html: demoHtml({
+        h1: "Esto es un título",
+        h2: "Esto es un subtítulo",
+        h3: "Y esto es un sub-subtítulo (nos entusiasmamos)",
+        quote: "Esto es una cita",
+        quote2: "Esta es otra cita, de otro color",
+        divider: "\u2191 Líneas divisorias, para tu comodidad",
+        list: "Esto es una lista",
+        sublist: "Con una sub-lista",
+        onItGoes: "Y así sigue\u2026",
+        colorStart: "Coloreá el inicio de una línea",
+        colorEnd: " y su viñeta lo acompaña",
+        numbered: "Esto es una lista numerada",
+        letters: "Las sub-listas usan letras",
+        roman: "Y después números romanos, porque sí",
+        count: "¡Contá todo!",
+        formatting: "Podés usar <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u>, <s>tachado</s> o {colored} {text}",
+        coloredWord: "texto",
+        textWord: "de color",
+        pills: "Y crear píldoras de muchos colores y grises",
+        twoLines: "Las píldoras pueden<br>ocupar dos líneas",
+        toggle: "Esta línea es un desplegable: tocá su flecha para plegar lo de abajo",
+        toggleBody1: "Todo lo que tiene sangría debajo de un desplegable se oculta al plegarlo.",
+        toggleBody2: "Ideal para lo que no necesitás ver todo el tiempo.",
+        backToNormal: "Esta línea volvió a ser texto normal, así que queda visible siempre.",
+        folded: "Este desplegable ya está plegado. Dale, abrilo",
+        foldedBody: "¡Hola! Encontraste el texto oculto. No hay nada más acá, perdón.",
+        headingFolds: "Los títulos también se pliegan (este está plegado)",
+        headingBody: "Una sección entera, guardada hasta que la necesites.",
+        item1: "Listas",
+        item2: "Citas",
+        item3: "Lo que quieras, en realidad",
+        deleteMe: "Esta es una plantilla de ejemplo. Si no la necesitás, podés borrarla desde el menú +.",
+      }),
+    },
+    en: {
+      title: "This is a note",
+      html: demoHtml({
+        h1: "This is a header",
+        h2: "This is a subheader",
+        h3: "And this is a sub-subheader (we got carried away)",
+        quote: "This is a quote",
+        quote2: "This is another quote, in a different color",
+        divider: "\u2191 Divider lines, for your convenience",
+        list: "This is a list",
+        sublist: "With a sublist",
+        onItGoes: "And on it goes\u2026",
+        colorStart: "Color the start of a line",
+        colorEnd: " and its bullet follows",
+        numbered: "This is a numbered list",
+        letters: "Sublists get letters",
+        roman: "And then roman numerals, because why not",
+        count: "Count everything!",
+        formatting: "You can use <b>bold</b>, <i>italic</i>, <u>underline</u>, <s>strike through</s> or {colored} {text}",
+        coloredWord: "colored",
+        textWord: "text",
+        pills: "And make pills in multiple colors and grays",
+        twoLines: "Pills can even<br>span two lines",
+        toggle: "This line is a toggle \u2014 click its arrow to fold what's below",
+        toggleBody1: "Everything indented under a toggle hides when you fold it.",
+        toggleBody2: "Perfect for things you don't need to see all the time.",
+        backToNormal: "This line is back to normal text, so it stays visible either way.",
+        folded: "This toggle is already folded. Go on, open it",
+        foldedBody: "Hi! You found the hidden text. There's nothing else here, sorry.",
+        headingFolds: "Headings fold too (this one is folded)",
+        headingBody: "A whole section, tucked away until you need it.",
+        item1: "Lists",
+        item2: "Quotes",
+        item3: "Anything, really",
+        deleteMe: "This is an example template. If you don't need it, you can delete it from the + menu.",
+      }),
     },
   },
 };

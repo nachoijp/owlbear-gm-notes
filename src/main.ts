@@ -4,9 +4,10 @@ import "./style.css";
 import { getStrings } from "./i18n";
 import type { Language, Strings, ToolbarStrings } from "./i18n";
 import { getNotes, setNotes, clearAllNotes, notesStorageBytes, sanitizeNote } from "./notes";
+import { sanitizeNoteHtml } from "./sanitizeHtml";
 import type { Note } from "./notes";
 import { getPluginId } from "./pluginId";
-import { getTemplates, setTemplates, resolveTemplate, toCustomTemplate, sanitizeTemplate } from "./templates";
+import { getTemplates, setTemplates, resolveTemplate, toCustomTemplate, sanitizeTemplate, missingBuiltins, newBuiltinTemplate } from "./templates";
 import type { Template } from "./templates";
 import { watchCloudTemplates, pushTemplate, deleteTemplateFromCloud } from "./templateSync";
 import { getLanguage, setLanguage, getAccentPref, setAccentPref } from "./prefs";
@@ -146,16 +147,23 @@ const PILL_COLORS = [
   { id: "azul", hex: "#3f8ce0" },
   { id: "verde", hex: "#4caf72" },
   { id: "amarillo", hex: "#d6b214" },
-  { id: "naranja", hex: "#e2822f" },
+  { id: "naranja", hex: "#f2780c" },
   { id: "rojo", hex: "#e04f4f" },
   { id: "rosa", hex: "#e05a86" },
   { id: "marrón", hex: "#9c6b3e" },
+  { id: "blanco", hex: "#ffffff" },
+  { id: "gris claro", hex: "#b8b8c0" },
   { id: "gris", hex: "#8b8994" },
+  { id: "negro", hex: "#2a2a30" },
 ];
 
 function escapeHtml(str: string): string {
   return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 }
+// Clipboard format for copying WITHIN GM Notes with formatting intact. Pasting anything else stays
+// plain text (see the paste handler); only content carrying this type keeps its formatting.
+const CLIPBOARD_TYPE = "application/x-gm-notes";
+
 // Best-effort Markdown -> this editor's own HTML, used on paste. Markdown source is plain text as
 // far as the clipboard is concerned, so stripping rich formatting alone (see the paste handler)
 // leaves the literal "**"/"#"/"-" markers sitting in the note. Parsing them into the SAME tags the
@@ -204,7 +212,7 @@ function markdownToHtml(text: string): string {
     const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       closeList();
-      const tag = heading[1].length === 1 ? "h1" : "h2";
+      const tag = "h" + Math.min(heading[1].length, 4);
       out.push(`<${tag}>${inline(heading[2].trim())}</${tag}>`);
       i++;
       continue;
@@ -331,6 +339,10 @@ function htmlToMarkdown(html: string): string {
         return `# ${inline(el)}`;
       case "H2":
         return `## ${inline(el)}`;
+      case "H3":
+        return `### ${inline(el)}`;
+      case "H4":
+        return `#### ${inline(el)}`;
       case "BLOCKQUOTE":
         return inline(el)
           .split("\n")
@@ -642,10 +654,36 @@ function startTemplateRename(itemEl: HTMLElement, template: Template) {
 
 const templateListEl = document.getElementById("templateList") as HTMLElement;
 
+// Brings back any built-in the GM deleted (and any added in a later version they never got), next
+// to whatever they already have — nothing existing is touched, so it needs no confirmation.
+async function restoreDefaultTemplates() {
+  const restored = missingBuiltins(templates).map(newBuiltinTemplate);
+  if (!restored.length) return;
+  templates.push(...restored);
+  await persistTemplates();
+  restored.forEach((t) => void pushTemplate(t));
+  renderTemplateList();
+}
+function appendRestoreButton() {
+  if (!missingBuiltins(templates).length) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "restore-templates-btn";
+  btn.setAttribute("role", "menuitem");
+  btn.textContent = strings().restoreTemplates;
+  btn.title = strings().restoreTemplatesHint;
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    void restoreDefaultTemplates();
+  });
+  templateListEl.appendChild(btn);
+}
+
 function renderTemplateList() {
   const s = strings();
   if (!templates.length) {
     templateListEl.innerHTML = `<div class="empty-list">${escapeHtml(s.templatesEmpty)}</div>`;
+    appendRestoreButton();
     return;
   }
   templateListEl.innerHTML = "";
@@ -707,6 +745,7 @@ function renderTemplateList() {
 
       templateListEl.appendChild(item);
     });
+  appendRestoreButton();
 }
 
 const newNoteWrap = document.getElementById("newNoteWrap")!;
@@ -887,7 +926,7 @@ function parseImportedNote(json: string): Note | null {
     return null;
   }
   const sanitized = sanitizeNote(data);
-  return sanitized ? { ...sanitized, id: freshNoteId() } : null;
+  return sanitized ? { ...sanitized, html: sanitizeNoteHtml(sanitized.html), id: freshNoteId() } : null;
 }
 
 // A Markdown file carries no title/id of its own — the filename (minus extension) becomes the title,
@@ -910,7 +949,7 @@ function parseImportedTemplate(json: string, inTemplateFolder: boolean): Templat
   const declared = (data as { type?: unknown } | null)?.type === "gm-notes-template";
   if (!declared && !inTemplateFolder) return null;
   const sanitized = sanitizeTemplate(data);
-  return sanitized ? { ...sanitized, id: "t" + freshNoteId() } : null;
+  return sanitized ? { ...sanitized, html: sanitizeNoteHtml(sanitized.html), id: "t" + freshNoteId() } : null;
 }
 
 interface ImportedContent {
@@ -1042,7 +1081,7 @@ interface ToolbarButtonSpec {
   titleKey?: keyof ToolbarStrings;
   style?: string;
   value?: string;
-  picker?: "pill" | "textColor" | "quoteColor";
+  picker?: "pill" | "textColor" | "quoteColor" | "block";
   sep?: boolean;
   svg?: string;
 }
@@ -1055,8 +1094,7 @@ const TOOLBAR_BUTTONS: ToolbarButtonSpec[] = [
   { picker: "pill" },
   { picker: "textColor" },
   { sep: true },
-  { cmd: "formatBlock", value: "H1", label: "H1", titleKey: "h1" },
-  { cmd: "formatBlock", value: "H2", label: "H2", titleKey: "h2" },
+  { picker: "block" },
   { picker: "quoteColor" },
   { cmd: "divider", titleKey: "divider", svg: '<svg viewBox="0 0 16 16" fill="none"><path d="M2 8h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>' },
   { sep: true },
@@ -1083,20 +1121,51 @@ function buildColorPicker(pickerId: string, btnId: string, swatchesId: string, t
   );
 }
 
+type BlockTag = "P" | "H1" | "H2" | "H3" | "H4" | "BLOCKQUOTE";
+// Block types offered by the block menu, in menu order. H4 is the "toggle" level: styled exactly
+// like a plain paragraph, so it reads as normal text that can collapse what follows it.
+const BLOCK_TYPES: { tag: BlockTag; key: "paragraph" | "h1" | "h2" | "h3" | "toggle"; short: string }[] = [
+  { tag: "P", key: "paragraph", short: "Aa" },
+  { tag: "H1", key: "h1", short: "H1" },
+  { tag: "H2", key: "h2", short: "H2" },
+  { tag: "H3", key: "h3", short: "H3" },
+  { tag: "H4", key: "toggle", short: "\u25b8" },
+];
+
+// Same dropdown shell as the color pickers (.pill-picker/.pill-swatches, so it shares their opening,
+// clamping and click-outside closing); its items are ordinary formatBlock toolbar buttons, handled by
+// the toolbar's own click listener.
+function buildBlockPicker(idPrefix: string): string {
+  const tb = strings().toolbar;
+  const items = BLOCK_TYPES.map(
+    (t) => `<button type="button" class="block-item block-item-${t.tag.toLowerCase()}" data-cmd="formatBlock" data-value="${t.tag}">${escapeHtml(tb[t.key])}</button>`
+  ).join("");
+  return (
+    `<div class="pill-picker block-picker" id="${idPrefix}BlockPicker">` +
+    `<button type="button" class="pill-picker-btn block-picker-btn" id="${idPrefix}BlockPickerBtn" title="${tb.blockType}" aria-haspopup="true" aria-expanded="false">` +
+    `<span class="block-picker-label" id="${idPrefix}BlockPickerLabel">Aa</span>` +
+    `<svg viewBox="0 0 16 16" fill="none"><path d="M4.5 6.5 8 10l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
+    `</button>` +
+    `<div class="pill-swatches block-menu" id="${idPrefix}BlockMenu" hidden>${items}</div>` +
+    `</div>`
+  );
+}
+
 function renderToolbarButton(b: ToolbarButtonSpec, idPrefix: string): string {
   if (b.sep) return '<span class="tb-sep"></span>';
   const tb = strings().toolbar;
+  if (b.picker === "block") return buildBlockPicker(idPrefix);
   if (b.picker === "pill") {
     return buildColorPicker(
       idPrefix + "PillPicker", idPrefix + "PillPickerBtn", idPrefix + "PillSwatches", tb.pill,
-      '<svg viewBox="0 0 16 16" fill="none"><rect x="2" y="5.5" width="12" height="5" rx="2.5" stroke="currentColor" stroke-width="1.3"/></svg>',
+      '<svg viewBox="0 0 16 16" fill="none"><rect x="1.5" y="5.4" width="13" height="5.2" rx="2.6" stroke="currentColor" stroke-width="1.4"/></svg>',
       tb.pillNone
     );
   }
   if (b.picker === "textColor") {
     return buildColorPicker(
       idPrefix + "TextColorPicker", idPrefix + "TextColorPickerBtn", idPrefix + "TextColorSwatches", tb.textColor,
-      '<svg viewBox="0 0 16 16" fill="none"><text x="2" y="11" font-size="10" font-weight="700" fill="currentColor">A</text><rect x="2" y="13" width="11" height="2" rx="1" fill="currentColor"/></svg>',
+      '<svg viewBox="0 0 16 16" fill="none"><text x="8" y="11.2" font-size="13" font-weight="700" text-anchor="middle" fill="currentColor">A</text><rect x="1.5" y="13" width="13" height="2.2" rx="1.1" fill="currentColor"/></svg>',
       tb.textColorNone
     );
   }
@@ -1113,6 +1182,7 @@ function renderToolbarButton(b: ToolbarButtonSpec, idPrefix: string): string {
 }
 
 // ---------- rich-text editor ----------
+let editorSelectionListener: (() => void) | null = null;
 function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: string | null, onSaved: () => void) {
   const seed = noteId ? notes.find((n) => n.id === noteId) : undefined;
   if (!seed) {
@@ -1148,7 +1218,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
 
   // Chrome's contenteditable defaults to wrapping a new line (e.g. pressing Enter right after
   // exiting a list) in a plain <div> instead of a <p> — that div is invisible to every block-aware
-  // function in this file (getTouchedBlocks/blockAt/setBlockType only recognize P/H1/H2/BLOCKQUOTE/
+  // function in this file (getTouchedBlocks/blockAt/setBlockType only recognize P/H1-H4/BLOCKQUOTE/
   // UL/OL as top-level blocks), so anything typed into it, including pills and color, silently never
   // participates in formatting at all. Telling the browser to use <p> instead makes every block it
   // creates on its own something our own code already understands. Re-applied on focus since it's a
@@ -1164,21 +1234,87 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // gets recorded there, so mixing the two desyncs the native history and Ctrl+Z misbehaves
   // (skips steps, half-undoes a divider, etc.). We snapshot innerHTML ourselves and fully own
   // undo/redo instead of ever invoking the browser's built-in contenteditable undo.
-  const history: string[] = [];
-  const future: string[] = [];
+  // Each snapshot also remembers the selection at that moment, so undo/redo puts the caret back
+  // where the change happened instead of the browser's default (the very start of the note).
+  // Positions are stored as (top-level block index, character offset within that block): stable
+  // across the innerHTML round-trip, unlike DOM node references, which all get replaced.
+  interface CaretPos { sb: number; so: number; eb: number; eo: number }
+  interface Snapshot { html: string; caret: CaretPos | null }
+  const history: Snapshot[] = [];
+  const future: Snapshot[] = [];
   let restoringHistory = false;
+
+  function pointToPos(node: Node, offset: number): [number, number] | null {
+    const blocks = Array.prototype.slice.call(surface.children) as HTMLElement[];
+    if (!blocks.length) return null;
+    if (node === surface) {
+      // offset counts child NODES (whitespace text between blocks included), not elements.
+      let index = 0;
+      for (let i = 0; i < offset && i < surface.childNodes.length; i++) {
+        if (surface.childNodes[i].nodeType === 1) index++;
+      }
+      return index >= blocks.length ? [blocks.length - 1, blockTextLength(blocks[blocks.length - 1])] : [index, 0];
+    }
+    const block = blockAt(node);
+    if (!block) return null;
+    const r = document.createRange();
+    r.setStart(block, 0);
+    r.setEnd(node, offset);
+    return [blocks.indexOf(block), r.toString().replace(/\u200b/g, "").length];
+  }
+  function blockTextLength(block: HTMLElement): number {
+    return (block.textContent || "").replace(/\u200b/g, "").length;
+  }
+  function posToPoint(blockIndex: number, offset: number): [Node, number] | null {
+    const blocks = surface.children;
+    if (!blocks.length) return null;
+    const block = blocks[Math.min(blockIndex, blocks.length - 1)] as HTMLElement;
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    let remaining = offset;
+    let last: Text | null = null;
+    for (let t = walker.nextNode() as Text | null; t; t = walker.nextNode() as Text | null) {
+      if (remaining <= t.data.length) return [t, remaining];
+      remaining -= t.data.length;
+      last = t;
+    }
+    return last ? [last, last.data.length] : [block, 0];
+  }
+  function captureCaret(): CaretPos | null {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0);
+    if (!surface.contains(r.startContainer) || !surface.contains(r.endContainer)) return null;
+    const start = pointToPos(r.startContainer, r.startOffset);
+    const end = pointToPos(r.endContainer, r.endOffset);
+    return start && end ? { sb: start[0], so: start[1], eb: end[0], eo: end[1] } : null;
+  }
+  function restoreCaret(caret: CaretPos | null) {
+    if (!caret) return;
+    const start = posToPoint(caret.sb, caret.so);
+    const end = posToPoint(caret.eb, caret.eo);
+    if (!start || !end) return;
+    const r = document.createRange();
+    r.setStart(start[0], start[1]);
+    r.setEnd(end[0], end[1]);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  function snapshot(): Snapshot {
+    return { html: editorHtml(), caret: captureCaret() };
+  }
   let typingBurstTimer: ReturnType<typeof setTimeout> | null = null;
   let wordCountTimer: ReturnType<typeof setTimeout> | null = null;
 
   function pushHistory() {
     if (restoringHistory) return;
-    history.push(surface.innerHTML);
+    history.push(snapshot());
     if (history.length > 100) history.shift();
     future.length = 0;
   }
   function afterHistoryRestore() {
     const n = currentNote();
-    if (n) n.html = surface.innerHTML;
+    if (n) n.html = editorHtml();
     updateEmptyState();
     updateWordCount();
     updateToolbarState();
@@ -1186,20 +1322,22 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   }
   function undo() {
     if (!history.length) return;
-    future.push(surface.innerHTML);
+    future.push(snapshot());
     const prev = history.pop()!;
     restoringHistory = true;
-    surface.innerHTML = prev;
+    surface.innerHTML = prev.html;
     restoringHistory = false;
+    restoreCaret(prev.caret);
     afterHistoryRestore();
   }
   function redo() {
     if (!future.length) return;
-    history.push(surface.innerHTML);
+    history.push(snapshot());
     const next = future.pop()!;
     restoringHistory = true;
-    surface.innerHTML = next;
+    surface.innerHTML = next.html;
     restoringHistory = false;
+    restoreCaret(next.caret);
     afterHistoryRestore();
   }
 
@@ -1253,11 +1391,27 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     const cmd = btn.dataset.cmd!;
     const value = btn.dataset.value || undefined;
     if (cmd === "formatBlock") {
-      setBlockType(((value || "P").toUpperCase()) as "P" | "H1" | "H2" | "BLOCKQUOTE");
+      const menuValue = ((value || "P").toUpperCase()) as BlockTag;
+      const converted = setBlockType(menuValue);
+      // The menu's "normal text" is always a standalone paragraph (<p data-standalone>): it ends the
+      // toggle above it, so picking it puts the text back outside any toggle — while paragraphs
+      // created by typing (Enter), clear-formatting or removing a quote stay plain and remain part of
+      // whatever toggle they're in.
+      if (menuValue === "P") {
+        converted.forEach((b) => b.setAttribute("data-standalone", ""));
+        applyFolding();
+      }
+      const blockMenu = document.getElementById(idPrefix + "BlockMenu");
+      if (blockMenu) blockMenu.hidden = true;
+      document.getElementById(idPrefix + "BlockPickerBtn")?.setAttribute("aria-expanded", "false");
     } else if (cmd === "divider") {
       insertDivider();
     } else if (cmd === "removeFormat") {
       clearFormatting();
+    } else if ((cmd === "indent" || cmd === "outdent") && !caretInList()) {
+      // Outside a list, Chrome "indents" by wrapping the block in a margin-styled <blockquote>, which
+      // the HTML sanitizer turns into a real (bar-styled) quote on other devices. These buttons are
+      // for sub-lists, same as Tab.
     } else {
       document.execCommand(cmd, false, value);
       // Chrome's own insertUnorderedList/insertOrderedList occasionally wraps the new <ul>/<ol>
@@ -1279,13 +1433,13 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       syncTextDecorationColors();
     }
     const n = currentNote();
-    if (n) n.html = surface.innerHTML;
+    if (n) n.html = editorHtml();
     scheduleSave();
     updateEmptyState();
     updateToolbarState();
   });
 
-  function wireColorPicker(btnId: string, swatchesId: string, onColor: (hex: string) => void, onNone?: () => void) {
+  function wireDropdown(btnId: string, swatchesId: string) {
     const btn = document.getElementById(btnId);
     const sw = document.getElementById(swatchesId);
     if (!btn || !sw) return;
@@ -1315,6 +1469,12 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
         sw.style.left = `${clampedLeft - pickerLeft}px`;
       }
     });
+  }
+  function wireColorPicker(btnId: string, swatchesId: string, onColor: (hex: string) => void, onNone?: () => void) {
+    const btn = document.getElementById(btnId);
+    const sw = document.getElementById(swatchesId);
+    if (!btn || !sw) return;
+    wireDropdown(btnId, swatchesId);
     sw.addEventListener("click", (ev) => {
       const b = (ev.target as HTMLElement).closest("button[data-color]") as HTMLElement | null;
       if (!b) return;
@@ -1325,13 +1485,14 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       sw.hidden = true;
       btn.setAttribute("aria-expanded", "false");
       const n = currentNote();
-      if (n) n.html = surface.innerHTML;
+      if (n) n.html = editorHtml();
       scheduleSave();
       updateEmptyState();
       updateToolbarState();
     });
   }
 
+  wireDropdown(idPrefix + "BlockPickerBtn", idPrefix + "BlockMenu");
   wireColorPicker(idPrefix + "PillPickerBtn", idPrefix + "PillSwatches", applyPillColor, removePillAtSelection);
   wireColorPicker(idPrefix + "TextColorPickerBtn", idPrefix + "TextColorSwatches", applyTextColor, resetTextColor);
   wireColorPicker(idPrefix + "QuoteColorPickerBtn", idPrefix + "QuoteColorSwatches", applyQuoteColor, removeQuote);
@@ -1367,14 +1528,15 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // so it always ends up as the OUTERMOST element around any <u>/<s> inside it — with execCommand,
   // the browser sometimes nests the color span *inside* an existing <u>, and text-decoration draws
   // in the <u>'s own (uncolored) color instead of inheriting the new one, so underlines stayed unchanged.
-  function applyTextColor(hex: string) {
+  function applyTextColor(hex: string, collapsedHex = hex) {
     surface.focus();
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return;
     const range = sel.getRangeAt(0);
     if (!surface.contains(range.commonAncestorContainer)) return;
     if (range.collapsed) {
-      document.execCommand("foreColor", false, hex);
+      // execCommand only accepts a literal color, never var(...) — hence the separate fallback.
+      document.execCommand("foreColor", false, collapsedHex);
       return;
     }
     const span = document.createElement("span");
@@ -1386,6 +1548,38 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       span.appendChild(frag);
       range.insertNode(span);
     }
+    // Any color already set INSIDE the selection would otherwise keep winning over the new outer
+    // span (the innermost color is the one that paints), so recoloring/resetting a selection that
+    // fully contains an earlier colored run looked like it did nothing.
+    Array.prototype.slice.call(span.querySelectorAll('span[style*="color"], font[color]')).forEach((el: HTMLElement) => {
+      if (el.tagName === "FONT") {
+        el.removeAttribute("color");
+      } else {
+        el.style.color = "";
+      }
+      if (!el.getAttribute("style")) el.removeAttribute("style");
+      if (!el.attributes.length) el.replaceWith(...Array.from(el.childNodes));
+    });
+    // Pills paint their own text color (derived from the pill color), which beats the new outer
+    // span — so a selection spanning pills used to leave their text unchanged. Give each pill inside
+    // the chosen color directly; a reset just drops that override, back to the pill's own color.
+    const isReset = hex === "var(--text-primary)";
+    Array.prototype.slice.call(span.querySelectorAll(".note-pill")).forEach((pill: HTMLElement) => {
+      pill.style.color = isReset ? "" : hex;
+    });
+    // A reset entirely inside one pill (e.g. a double-clicked pill) means "back to the pill's own
+    // text color", not the base text color — and if it covers the pill's whole text, the pill's own
+    // color override goes too.
+    const hostPill = span.parentElement && (span.parentElement.closest(".note-pill") as HTMLElement | null);
+    if (isReset && hostPill) {
+      span.style.color = "var(--pill-text)";
+      if (span.textContent === hostPill.textContent) hostPill.style.color = "";
+    }
+    // Splitting a pill at the selection's edge (extractContents, when the selection starts/ends right
+    // at a pill's boundary) can leave an empty pill shell behind, drawn as a tiny blank pill.
+    Array.prototype.slice.call(surface.querySelectorAll(".note-pill")).forEach((pill: HTMLElement) => {
+      if (pill.textContent === "") pill.remove();
+    });
     sel.removeAllRanges();
     const newRange = document.createRange();
     newRange.selectNodeContents(span);
@@ -1396,9 +1590,12 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     // that could never have found anything to change for them.
     syncTextDecorationColors();
   }
+  // Resets to var(--text-primary) itself rather than its current computed value, so the "reset"
+  // text keeps following the theme — freezing the computed value left text reset in dark mode stuck
+  // white after switching to light mode.
   function resetTextColor() {
     const computed = getComputedStyle(panel).getPropertyValue("--text-primary").trim() || "#000000";
-    applyTextColor(computed);
+    applyTextColor("var(--text-primary)", computed);
   }
 
   // text-decoration set on an ancestor (e.g. a toolbar-created <u>/<s>) keeps painting in THAT
@@ -1433,10 +1630,31 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     const pillEl = el && el.closest ? (el.closest(".note-pill") as HTMLElement | null) : null;
     return pillEl && surface.contains(pillEl) ? pillEl : null;
   }
+  // Every pill a (non-collapsed) selection actually covers some text of — e.g. a word split into two
+  // differently-colored pills, double-click-selected as a whole. Falls back to the pill the caret
+  // sits in, so recoloring/removing from a plain caret inside a pill keeps working.
+  function pillsInSelection(): HTMLElement[] {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return [];
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) {
+      const covered = Array.prototype.slice.call(surface.querySelectorAll(".note-pill")).filter((pill: HTMLElement) => {
+        if (!range.intersectsNode(pill)) return false;
+        const part = document.createRange();
+        part.selectNodeContents(pill);
+        if (part.compareBoundaryPoints(Range.START_TO_START, range) < 0) part.setStart(range.startContainer, range.startOffset);
+        if (part.compareBoundaryPoints(Range.END_TO_END, range) > 0) part.setEnd(range.endContainer, range.endOffset);
+        return part.toString() !== "";
+      }) as HTMLElement[];
+      if (covered.length) return covered;
+    }
+    const single = getPillAtSelection();
+    return single ? [single] : [];
+  }
   function applyPillColor(hex: string) {
-    const existing = getPillAtSelection();
-    if (existing) {
-      existing.style.setProperty("--pill-c", hex);
+    const existing = pillsInSelection();
+    if (existing.length) {
+      existing.forEach((pill) => pill.style.setProperty("--pill-c", hex));
       return;
     }
     const sel = window.getSelection();
@@ -1459,11 +1677,10 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     sel.addRange(newRange);
   }
   function removePillAtSelection() {
-    const existing = getPillAtSelection();
-    if (existing) {
-      const text = document.createTextNode(existing.textContent || "");
-      existing.replaceWith(text);
-    }
+    pillsInSelection().forEach((pill) => {
+      const text = document.createTextNode(pill.textContent || "");
+      pill.replaceWith(text);
+    });
   }
 
   // The block-level element (P/H1/H2/BLOCKQUOTE/UL/OL) that's a DIRECT CHILD of `surface` and
@@ -1491,12 +1708,12 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // `document.execCommand("formatBlock", false, "P")` only ever converts the outermost wrapper of,
   // leaving inner heading tags — and the font size they carry — behind.
   function flattenNestedBlocks(block: HTMLElement) {
-    let nested = block.querySelector("h1, h2, blockquote, p");
+    let nested = block.querySelector("h1, h2, h3, h4, blockquote, p");
     while (nested) {
       const parent = nested.parentNode!;
       while (nested.firstChild) parent.insertBefore(nested.firstChild, nested);
       parent.removeChild(nested);
-      nested = block.querySelector("h1, h2, blockquote, p");
+      nested = block.querySelector("h1, h2, h3, h4, blockquote, p");
     }
   }
 
@@ -1519,7 +1736,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     // sidesteps container-resolution entirely: no endpoint to misplace.
     const candidates = Array.prototype.slice.call(surface.children) as HTMLElement[];
     return candidates.filter(
-      (el) => /^(P|H1|H2|BLOCKQUOTE|UL|OL)$/.test(el.tagName) && range.intersectsNode(el)
+      (el) => /^(P|H[1-4]|BLOCKQUOTE|UL|OL)$/.test(el.tagName) && range.intersectsNode(el)
     );
   }
 
@@ -1533,14 +1750,13 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // exactly what's there now — the selection itself collapses to a single caret position by the time
   // this returns (see placeCaretAtStart below), so re-deriving "what did we just touch" from the
   // selection afterward would only ever see one of them again.
-  function setBlockType(tag: "P" | "H1" | "H2" | "BLOCKQUOTE"): HTMLElement[] {
+  function setBlockType(tag: BlockTag): HTMLElement[] {
     const blocks = getTouchedBlocks();
     if (!blocks.length) return [];
 
-    // Toggle: re-clicking a heading that's already applied to every touched block reverts to a
-    // plain paragraph instead of re-applying (and re-nesting) the same tag.
-    const allMatch = blocks.every((b) => b.tagName === tag);
-    const finalTag = allMatch ? "P" : tag;
+    // Picking the type a block already has is a no-op (the block menu has an explicit "normal text"
+    // entry, so the old re-click-to-revert toggle of the H1/H2 buttons is gone).
+    const finalTag = tag;
 
     const result: HTMLElement[] = [];
     let firstNew: HTMLElement | null = null;
@@ -1550,6 +1766,10 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
         result.push(b);
         return;
       }
+      // A list can't become a paragraph by wrapping it (that's the invalid <p><ul> nesting
+      // unwrapNestedLists() exists to undo); lists are turned into text by the list buttons or
+      // clear-formatting, which unpack them item by item first.
+      if (finalTag === "P" && (b.tagName === "UL" || b.tagName === "OL")) return;
       const nb = document.createElement(finalTag);
       if (b.tagName === "UL" || b.tagName === "OL") {
         // A list's <li>s are only valid inside a <ul>/<ol> — unpacking them straight into the new
@@ -1730,7 +1950,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // contain — up to take its place; a wrapper left with nothing afterward is removed entirely.
   function unwrapNestedLists() {
     Array.prototype.slice.call(surface.children).forEach((el: HTMLElement) => {
-      if (!/^(P|H1|H2|BLOCKQUOTE)$/.test(el.tagName)) return;
+      if (!/^(P|H[1-4]|BLOCKQUOTE)$/.test(el.tagName)) return;
       if (!el.querySelector(":scope > ul, :scope > ol")) return;
       while (el.firstChild) el.parentElement!.insertBefore(el.firstChild, el);
       el.remove();
@@ -1885,11 +2105,71 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // recognizing markdown syntax the pasted text itself might use (headings, lists, bold/italic, etc.)
   // and turning it into this editor's own real blocks instead of leaving literal "**"/"#"/"-" markers
   // sitting in the note.
+  // Copy/cut put the selection on the clipboard three ways: plain text (for other apps), HTML, and our
+  // own CLIPBOARD_TYPE, which the paste handler below recognizes to keep the formatting. A selection
+  // inside a single block is re-wrapped in the inline formatting around it (pill, color, bold...), and
+  // list items in their list, since the browser's range clone only carries what's strictly inside it.
+  function selectionHtml(): string | null {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    if (!surface.contains(range.commonAncestorContainer)) return null;
+    let content: Node = range.cloneContents();
+    let el: Node | null = range.commonAncestorContainer;
+    if (el.nodeType === 3) el = el.parentNode;
+    while (el && el !== surface) {
+      const tag = (el as HTMLElement).tagName;
+      const inline = /^(SPAN|FONT|B|STRONG|I|EM|U|S|STRIKE)$/.test(tag);
+      const listWrap = (tag === "UL" || tag === "OL") && Array.prototype.some.call(content.childNodes, (n: Node) => n.nodeName === "LI");
+      if (inline || listWrap) {
+        const wrap = (el as HTMLElement).cloneNode(false) as HTMLElement;
+        wrap.appendChild(content);
+        const frag = document.createDocumentFragment();
+        frag.appendChild(wrap);
+        content = frag;
+      }
+      el = el.parentNode;
+    }
+    const box = document.createElement("div");
+    box.appendChild(content);
+    return sanitizeNoteHtml(box.innerHTML);
+  }
+  function onCopy(ev: ClipboardEvent, cut: boolean) {
+    const html = selectionHtml();
+    if (html === null || !ev.clipboardData) return;
+    ev.preventDefault();
+    const text = window.getSelection()!.toString().replace(/\u200b/g, "");
+    ev.clipboardData.setData("text/plain", text);
+    ev.clipboardData.setData("text/html", html);
+    ev.clipboardData.setData(CLIPBOARD_TYPE, html);
+    // Cancelling the event cancels the browser's own deletion too; doing it via execCommand keeps it
+    // in our undo history (beforeinput) and saved (input) like any other edit.
+    if (cut) document.execCommand("delete");
+  }
+  surface.addEventListener("copy", (ev: ClipboardEvent) => onCopy(ev, false));
+  surface.addEventListener("cut", (ev: ClipboardEvent) => onCopy(ev, true));
+
   surface.addEventListener("paste", (ev: ClipboardEvent) => {
     ev.preventDefault();
+    const own = ev.clipboardData?.getData(CLIPBOARD_TYPE) ?? "";
+    if (own) {
+      document.execCommand("insertHTML", false, sanitizeNoteHtml(own));
+      unwrapNestedLists();
+      removeEditorNoise();
+      syncTextDecorationColors();
+      return;
+    }
     const text = ev.clipboardData?.getData("text/plain") ?? "";
     if (!text) return;
-    document.execCommand("insertHTML", false, markdownToHtml(text));
+    const html = markdownToHtml(text);
+    // A single line with no Markdown in it (a copied word or phrase, the common case) is inserted as
+    // plain text: going through insertHTML wraps it in a <p>, and the browser drops whitespace at a
+    // block's edges, so a copied "word " lost its trailing space. insertText keeps it.
+    if (!/[\r\n]/.test(text) && html === `<p>${escapeHtml(text)}</p>`) {
+      document.execCommand("insertText", false, text);
+      return;
+    }
+    document.execCommand("insertHTML", false, html);
     unwrapNestedLists();
     removeEditorNoise();
   });
@@ -1899,9 +2179,284 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     if (typingBurstTimer) clearTimeout(typingBurstTimer);
     typingBurstTimer = setTimeout(() => { typingBurstTimer = null; }, 700);
   });
-  surface.addEventListener("input", () => {
+  // A pill's trailing edge: Chrome treats "end of the pill's text" and "start of whatever follows it"
+  // as the same caret spot, draws the caret inside the pill there, and keeps typed text inside it —
+  // and when a pill ends its paragraph there's no outside spot at all. So "outside" gets its own
+  // caret anchor: a zero-width-space text node right after the pill, with the caret parked after
+  // it. Chrome then both draws the caret outside the pill and types there natively. Being at the
+  // pill's end INSIDE it stays a distinct spot (typing there extends the pill); → / ← step between
+  // the two. The anchor's zero-width space is stripped as soon as real text lands next to it, or
+  // the anchor removed entirely once the caret leaves it unused, so it never reaches a saved note.
+  const PILL_ANCHOR = "\u200b";
+  let pillAnchor: Text | null = null;
+  // The editor's HTML minus purely view-side state, for anything saved or snapshotted: the caret
+  // anchor's zero-width space and the data-folded markers applyFolding() puts on hidden blocks
+  // (recomputed from each heading's data-collapsed whenever a note is shown, so never worth storing).
+  function editorHtml(): string {
+    let html = surface.innerHTML.split(' data-folded=""').join("").replace(/ data-depth="\d+"/g, "");
+    if (pillAnchor) html = html.split(PILL_ANCHOR).join("");
+    return html;
+  }
+  const isPillNode = (n: Node | null | undefined): n is HTMLElement =>
+    !!n && n.nodeType === 1 && (n as HTMLElement).classList.contains("note-pill");
+
+  // The pill whose end the (collapsed) caret sits at: `inside` = within the pill, after its last
+  // character; `outside` = any DOM form of the spot just after it (excluding our own anchor).
+  function pillEdgeAtCaret(): { pill: HTMLElement; inside: boolean } | null {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) return null;
+    const r = sel.getRangeAt(0);
+    const node = r.startContainer;
+    if (!surface.contains(node) || node === pillAnchor) return null;
+    const el = node.nodeType === 3 ? node.parentElement : (node as HTMLElement);
+    const inside = el && el.closest ? (el.closest(".note-pill") as HTMLElement | null) : null;
+    if (inside && surface.contains(inside)) {
+      const rest = document.createRange();
+      rest.setStart(node, r.startOffset);
+      rest.setEnd(inside, inside.childNodes.length);
+      return rest.toString() === "" ? { pill: inside, inside: true } : null;
+    }
+    if (node.nodeType === 3 && r.startOffset === 0 && isPillNode(node.previousSibling)) return { pill: node.previousSibling, inside: false };
+    if (node.nodeType === 1 && r.startOffset > 0 && isPillNode(node.childNodes[r.startOffset - 1])) return { pill: node.childNodes[r.startOffset - 1] as HTMLElement, inside: false };
+    return null;
+  }
+  function caretAfterPill(pill: HTMLElement) {
+    let anchor = pill.nextSibling as Text | null;
+    if (!(anchor && anchor === pillAnchor)) {
+      anchor = document.createTextNode(PILL_ANCHOR);
+      pill.after(anchor);
+      pillAnchor = anchor;
+    }
+    window.getSelection()!.collapse(anchor, anchor.data.indexOf(PILL_ANCHOR) + 1);
+  }
+  function caretAtPillEnd(pill: HTMLElement) {
+    const r = document.createRange();
+    r.selectNodeContents(pill);
+    r.collapse(false);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  // Strips the anchor's zero-width space (or drops the whole node if that's all it holds), keeping
+  // the caret where it was if it's inside the anchor.
+  function releasePillAnchor() {
+    const anchor = pillAnchor;
+    pillAnchor = null;
+    if (!anchor || !anchor.parentNode) return;
+    const idx = anchor.data.indexOf(PILL_ANCHOR);
+    if (idx < 0) return;
+    if (anchor.data.length === 1) {
+      anchor.remove();
+      return;
+    }
+    const sel = window.getSelection();
+    const caretHere = !!sel && sel.isCollapsed && sel.anchorNode === anchor;
+    const offset = caretHere ? sel!.anchorOffset : 0;
+    anchor.deleteData(idx, 1);
+    if (caretHere) sel!.collapse(anchor, offset > idx ? offset - 1 : offset);
+  }
+  // A document-level listener, so it's swapped rather than added: the editor is rebuilt on every note
+  // switch, and each rebuild used to leave its predecessor's listener (and detached editor) behind.
+  if (editorSelectionListener) document.removeEventListener("selectionchange", editorSelectionListener);
+  editorSelectionListener = () => {
+    if (restoringHistory) return;
+    const sel = window.getSelection();
+    if (pillAnchor && !(sel && sel.isCollapsed && sel.anchorNode === pillAnchor)) releasePillAnchor();
+    // A click (or ←) landing just after a pill: move it onto the anchor so the caret shows outside.
+    const edge = pillEdgeAtCaret();
+    if (edge && !edge.inside) caretAfterPill(edge.pill);
+  };
+  document.addEventListener("selectionchange", editorSelectionListener);
+
+  // A list item's bullet/number takes the color of the item's first character, so coloring the start
+  // of a line recolors its marker too (the browser otherwise always paints markers in the item's own,
+  // uncolored text color). Stored as --marker-c on the <li>, read by li::marker in the CSS.
+  function firstTextColor(li: HTMLElement): string {
+    const walker = document.createTreeWalker(li, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) =>
+        n.nodeType === 1 && /^(UL|OL)$/.test((n as Element).tagName) ? NodeFilter.FILTER_REJECT
+          : n.nodeType === 3 && (n as Text).data.replace(/\u200b/g, "").trim() ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_SKIP,
+    });
+    const text = walker.nextNode();
+    let el = text ? text.parentElement : null;
+    while (el && el !== li) {
+      if (el.tagName === "SPAN" && el.style.color) return el.style.color;
+      if (el.tagName === "FONT" && el.getAttribute("color")) return el.getAttribute("color")!;
+      if (el.classList.contains("note-pill")) {
+        if (el.style.color) return el.style.color;
+        const pillC = el.style.getPropertyValue("--pill-c").trim() || "var(--primary-main)";
+        return `color-mix(in srgb, ${pillC} 50%, var(--text-primary))`;
+      }
+      el = el.parentElement;
+    }
+    return "";
+  }
+  function syncListMarkerColors() {
+    Array.prototype.slice.call(surface.querySelectorAll("li")).forEach((li: HTMLElement) => {
+      const c = firstTextColor(li);
+      // Only write when it actually changes: this runs from a MutationObserver that also sees its own
+      // style writes, so an unchanged value must not touch the DOM again.
+      if (li.style.getPropertyValue("--marker-c") === c) return;
+      if (c) li.style.setProperty("--marker-c", c);
+      else {
+        li.style.removeProperty("--marker-c");
+        if (!li.getAttribute("style")) li.removeAttribute("style");
+      }
+    });
+  }
+  let markerSyncFrame = 0;
+  new MutationObserver(() => {
+    if (markerSyncFrame) return;
+    markerSyncFrame = requestAnimationFrame(() => {
+      markerSyncFrame = 0;
+      syncListMarkerColors();
+    });
+  }).observe(surface, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["style", "color", "class"] });
+  syncListMarkerColors();
+
+  // Collapsible sections: an H1-H4 with data-collapsed hides every following top-level block up to
+  // the next heading of the same or a higher level (H4, the "toggle" level, is styled as plain text).
+  // Blocks are only ever hidden, never moved or nested, so nothing else in the editor needs to know
+  // about sections. The chevron is the heading's ::before, drawn in the gutter to its left.
+  function headingLevel(el: Element): number {
+    const m = /^H([1-4])$/.exec(el.tagName);
+    return m ? Number(m[1]) : 0;
+  }
+  // Also gives every block a data-depth (how many sections enclose it), which indents it a step per
+  // level, so the indent shows which section each line belongs to — toggles look like plain text, so
+  // it's also what shows where one ends. A section ends at the next heading of the same or a higher
+  // level (so toggles can't nest); a standalone paragraph ends ONLY a toggle section, never an H1-H3's.
+  function setFlag(el: HTMLElement, name: string, on: boolean) {
+    if (on && !el.hasAttribute(name)) el.setAttribute(name, "");
+    else if (!on && el.hasAttribute(name)) el.removeAttribute(name);
+  }
+  function applyFolding() {
+    let hideUntil = 0;
+    const open: number[] = []; // levels of the sections enclosing the current block, outermost first
+    Array.prototype.slice.call(surface.children).forEach((el: HTMLElement) => {
+      const level = headingLevel(el);
+      const standalone = el.tagName === "P" && el.hasAttribute("data-standalone");
+      if (level) while (open.length && open[open.length - 1] >= level) open.pop();
+      if (standalone) while (open.length && open[open.length - 1] === 4) open.pop();
+      if (hideUntil && ((level && level <= hideUntil) || (standalone && hideUntil === 4))) hideUntil = 0;
+      const depth = String(open.length);
+      if (open.length) {
+        if (el.getAttribute("data-depth") !== depth) el.setAttribute("data-depth", depth);
+      } else if (el.hasAttribute("data-depth")) {
+        el.removeAttribute("data-depth");
+      }
+      setFlag(el, "data-folded", !!hideUntil);
+      if (level) open.push(level);
+      if (!hideUntil && level && el.hasAttribute("data-collapsed")) hideUntil = level;
+    });
+  }
+  // Every structural change (typing a new block, setBlockType's replacements, undo/redo, paste)
+  // shows up as a childList change on the surface itself; applyFolding only touches attributes, so
+  // it can't retrigger this.
+  new MutationObserver(applyFolding).observe(surface, { childList: true });
+  applyFolding();
+
+  // Collapsing/expanding is saved locally only: it neither bumps the note's "edited" time (which
+  // would reorder the note list) nor marks it for cloud sync. The state rides along to the cloud
+  // with the next real edit of the note.
+  function toggleFold(heading: HTMLElement) {
+    if (heading.hasAttribute("data-collapsed")) heading.removeAttribute("data-collapsed");
+    else heading.setAttribute("data-collapsed", "");
+    applyFolding();
+    const sel = window.getSelection();
+    const caretBlock = sel && sel.rangeCount ? blockAt(sel.getRangeAt(0).startContainer) : null;
+    if (caretBlock && caretBlock.hasAttribute("data-folded")) {
+      const r = document.createRange();
+      r.selectNodeContents(heading);
+      r.collapse(false);
+      sel!.removeAllRanges();
+      sel!.addRange(r);
+    }
+    saveFoldState();
+  }
+  function saveFoldState() {
     const n = currentNote();
-    if (n) n.html = surface.innerHTML;
+    if (n) {
+      n.html = editorHtml();
+      void persist();
+    }
+  }
+  // Expands whatever collapsed heading(s) hide `hidden` (a data-folded block): the owner is the
+  // nearest preceding block that isn't itself hidden; a nested collapsed heading inside it may
+  // still hide `hidden` after that, hence the loop.
+  function unfoldAround(hidden: HTMLElement) {
+    while (hidden.hasAttribute("data-folded")) {
+      let owner = hidden.previousElementSibling as HTMLElement | null;
+      while (owner && owner.hasAttribute("data-folded")) owner = owner.previousElementSibling as HTMLElement | null;
+      if (!owner || !owner.hasAttribute("data-collapsed")) break;
+      owner.removeAttribute("data-collapsed");
+      applyFolding();
+    }
+    saveFoldState();
+  }
+  // Backspace at the start of the block right after a collapsed section (or Delete at the end of a
+  // collapsed heading) made Chrome merge across the hidden blocks, silently deleting all of them.
+  // Instead, that key press just expands the section, so the merge — if still wanted, with a second
+  // press — happens with its content in plain sight.
+  function guardFoldedMerge(ev: KeyboardEvent): boolean {
+    if (ev.key !== "Backspace" && ev.key !== "Delete") return false;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
+    const r = sel.getRangeAt(0);
+    const block = blockAt(r.startContainer);
+    if (!block) return false;
+    const edge = document.createRange();
+    edge.selectNodeContents(block);
+    if (ev.key === "Backspace") edge.setEnd(r.startContainer, r.startOffset);
+    else edge.setStart(r.startContainer, r.startOffset);
+    if (edge.toString() !== "") return false;
+    const neighbor = (ev.key === "Backspace" ? block.previousElementSibling : block.nextElementSibling) as HTMLElement | null;
+    if (!neighbor || !neighbor.hasAttribute("data-folded")) return false;
+    ev.preventDefault();
+    unfoldAround(neighbor);
+    return true;
+  }
+  surface.addEventListener("mousedown", (ev) => {
+    const target = ev.target as HTMLElement;
+    const heading = target && target.closest ? (target.closest("h1, h2, h3, h4") as HTMLElement | null) : null;
+    if (!heading || heading.parentElement !== surface) return;
+    // Only the chevron itself, which sits left of the heading's own box.
+    if (ev.clientX >= heading.getBoundingClientRect().left) return;
+    ev.preventDefault();
+    toggleFold(heading);
+  });
+
+  // The editor must always hold at least one real block. Backspace/Delete in a note whose only block
+  // is empty made Chrome remove that block entirely, leaving typed text loose in the surface (outside
+  // any <p>) and Enter falling back to a bare <br> — the shorter line gap. Two guards: those keys are
+  // swallowed when there's nothing left to delete (keydown handler), and any edit that still empties
+  // the surface (e.g. select-all + delete) gets its loose content wrapped back into a paragraph here.
+  function isOnlyEmptyBlock(): HTMLElement | null {
+    const only = surface.children.length === 1 ? (surface.firstElementChild as HTMLElement) : null;
+    if (!only || !/^(P|H[1-4]|BLOCKQUOTE)$/.test(only.tagName)) return null;
+    if ((only.textContent || "").replace(/\u200b/g, "") !== "" || only.querySelector("hr, ul, ol")) return null;
+    return only;
+  }
+  function ensureBlockWrapper() {
+    const hasBlock = Array.prototype.some.call(surface.children, (el: Element) => /^(P|H[1-4]|BLOCKQUOTE|UL|OL|HR|DIV)$/.test(el.tagName));
+    if (hasBlock) return;
+    const p = document.createElement("p");
+    while (surface.firstChild) p.appendChild(surface.firstChild);
+    if (!(p.textContent || "").trim() && !p.querySelector("br")) p.innerHTML = "<br>";
+    surface.appendChild(p);
+    const r = document.createRange();
+    r.selectNodeContents(p);
+    r.collapse(false);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  surface.addEventListener("input", () => {
+    ensureBlockWrapper();
+    if (pillAnchor && pillAnchor.data !== PILL_ANCHOR) releasePillAnchor();
+    const n = currentNote();
+    if (n) n.html = editorHtml();
     updateEmptyState();
     scheduleWordCountUpdate();
     scheduleSave();
@@ -1912,24 +2467,94 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     const isRedo = (ev.ctrlKey || ev.metaKey) && (key === "y" || (ev.shiftKey && key === "z"));
     if (isUndo) { ev.preventDefault(); undo(); return; }
     if (isRedo) { ev.preventDefault(); redo(); return; }
+    // → at a pill's last character steps just outside it instead of skipping past the next
+    // character, so there's a way to put the caret right after a pill (see pillEndingAtCaret).
+    if (guardFoldedMerge(ev)) return;
+    if ((ev.key === "Backspace" || ev.key === "Delete") && window.getSelection()?.isCollapsed) {
+      const only = isOnlyEmptyBlock();
+      if (only) {
+        ev.preventDefault();
+        // An empty heading/quote as the only block goes back to a plain paragraph instead.
+        if (only.tagName !== "P") {
+          pushHistory();
+          setBlockType("P");
+          surface.dispatchEvent(new Event("input"));
+        }
+        return;
+      }
+    }
+    // Enter at a pill's end (inside it): Chrome clones the pill onto the new line as an empty pill
+    // the next characters land in, and breaking out of a list from there (a second Enter) turns that
+    // into stray inline color/background styles. Stepping just outside the pill first makes the new
+    // line start clean. (Shift+Enter, a line break WITHIN the pill, is left alone.)
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
+      const edge = pillEdgeAtCaret();
+      if (edge && edge.inside) caretAfterPill(edge.pill);
+    }
+    if (ev.key === "Enter") {
+      const sel = window.getSelection();
+      const block = sel && sel.rangeCount ? blockAt(sel.getRangeAt(0).startContainer) : null;
+      if (block && headingLevel(block)) {
+        // Ctrl+Enter collapses/expands the heading the caret is in (keyboard access to the chevron).
+        if (ev.ctrlKey || ev.metaKey) { ev.preventDefault(); toggleFold(block); return; }
+        // A plain Enter in a collapsed heading expands it first: the new line would otherwise land
+        // inside the hidden section (with the caret in it), and Chrome copies the heading's
+        // attributes onto the half it splits off, which would duplicate the collapsed state.
+        if (block.hasAttribute("data-collapsed")) { block.removeAttribute("data-collapsed"); applyFolding(); }
+      }
+    }
+    const plainArrow = !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey;
+    if (ev.key === "ArrowRight" && plainArrow) {
+      const edge = pillEdgeAtCaret();
+      if (edge && edge.inside) { ev.preventDefault(); caretAfterPill(edge.pill); updateToolbarState(); }
+      return;
+    }
+    if (ev.key === "ArrowLeft" && plainArrow) {
+      const sel = window.getSelection();
+      const prev = pillAnchor && pillAnchor.previousSibling;
+      if (sel && sel.anchorNode === pillAnchor && isPillNode(prev)) { ev.preventDefault(); caretAtPillEnd(prev); updateToolbarState(); }
+      return;
+    }
     if (ev.key !== "Tab") return;
-    let inList = false;
-    try { inList = document.queryCommandState("insertUnorderedList") || document.queryCommandState("insertOrderedList"); } catch { /* ignore */ }
-    if (!inList) return;
+    if (!caretInList()) return;
     ev.preventDefault();
     pushHistory();
     document.execCommand(ev.shiftKey ? "outdent" : "indent", false, undefined);
     const n = currentNote();
-    if (n) n.html = surface.innerHTML;
+    if (n) n.html = editorHtml();
     scheduleSave();
     updateEmptyState();
     updateToolbarState();
   });
   surface.addEventListener("keyup", updateToolbarState);
   surface.addEventListener("mouseup", updateToolbarState);
+  // Double-clicking a word made of two adjacent pills (no space between them) selected the whole word
+  // across both. Clamp the browser's word selection to the pill that was actually clicked.
+  surface.addEventListener("dblclick", (ev) => {
+    const pill = (ev.target as HTMLElement).closest ? ((ev.target as HTMLElement).closest(".note-pill") as HTMLElement | null) : null;
+    const sel = window.getSelection();
+    if (!pill || !surface.contains(pill) || !sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0).cloneRange();
+    const bounds = document.createRange();
+    bounds.selectNodeContents(pill);
+    if (range.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) range.setStart(bounds.startContainer, bounds.startOffset);
+    if (range.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) range.setEnd(bounds.endContainer, bounds.endOffset);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    updateToolbarState();
+  });
 
+  function caretInList(): boolean {
+    try {
+      return document.queryCommandState("insertUnorderedList") || document.queryCommandState("insertOrderedList");
+    } catch {
+      return false;
+    }
+  }
   function updateEmptyState() {
-    const isEmpty = surface.textContent!.replace(/​/g, "").trim() === "";
+    // No text AND no text-less structure (a list item, divider or quote), which the placeholder,
+    // overlaid on the first line, would otherwise cover.
+    const isEmpty = surface.textContent!.replace(/​/g, "").trim() === "" && !surface.querySelector("ul, ol, hr, blockquote");
     surface.classList.toggle("is-empty", isEmpty);
   }
   function updateWordCount() {
@@ -1966,9 +2591,12 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     // this highlight consistent with what setBlockType will actually do on the next click.
     const blockSel = window.getSelection();
     const currentBlockTag = blockSel && blockSel.rangeCount ? blockAt(blockSel.getRangeAt(0).startContainer)?.tagName || "" : "";
+    const menuTag = /^H[1-4]$/.test(currentBlockTag) ? currentBlockTag : "P";
     document.querySelectorAll(`#${idPrefix}Toolbar button[data-cmd="formatBlock"]`).forEach((b) => {
-      b.classList.toggle("active", (b as HTMLElement).dataset.value!.toUpperCase() === currentBlockTag);
+      b.classList.toggle("active", (b as HTMLElement).dataset.value!.toUpperCase() === menuTag);
     });
+    const blockLabel = document.getElementById(idPrefix + "BlockPickerLabel");
+    if (blockLabel) blockLabel.textContent = (BLOCK_TYPES.find((t) => t.tag === menuTag) || BLOCK_TYPES[0]).short;
 
     const pillPickerBtnEl = document.getElementById(idPrefix + "PillPickerBtn");
     if (pillPickerBtnEl) {
@@ -2277,6 +2905,16 @@ const sizeHint = document.getElementById("sizeHint")!;
   }
   handle.addEventListener("pointerup", stop);
   handle.addEventListener("pointercancel", stop);
+
+  // Double-click: back to the default size. Must match action.width/height in public/manifest.json
+  // (the whole iframe, margin included); the panel itself goes back to its CSS default (100%).
+  const DEFAULT_IFRAME_W = 434;
+  const DEFAULT_IFRAME_H = 580;
+  handle.addEventListener("dblclick", () => {
+    panel.style.width = "";
+    panel.style.height = "";
+    void Promise.all([OBR.action.setWidth(DEFAULT_IFRAME_W), OBR.action.setHeight(DEFAULT_IFRAME_H)]).then(syncToRealViewport);
+  });
 })();
 
 // ---------- role: this is a GM-only tool; players see a blocking gate instead ----------

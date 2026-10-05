@@ -9,8 +9,12 @@ export interface ToolbarStrings {
   pillNone: string;
   textColor: string;
   textColorNone: string;
+  blockType: string;
+  paragraph: string;
   h1: string;
   h2: string;
+  h3: string;
+  toggle: string;
   quoteColor: string;
   quoteColorNone: string;
   divider: string;
@@ -51,6 +55,8 @@ export interface Strings {
   blankNote: string;
   templatesLabel: string;
   templatesEmpty: string;
+  restoreTemplates: string;
+  restoreTemplatesHint: string;
   saveAsTemplateTitle: string;
   saveAsTemplateAria: string;
   templateSaved: (title: string) => string;
@@ -123,6 +129,8 @@ const STRINGS: Record<Language, Strings> = {
     newNoteDefaultTitle: "Nueva nota",
     blankNote: "Nota en blanco",
     templatesLabel: "Plantillas",
+    restoreTemplates: "Restaurar plantillas predeterminadas",
+    restoreTemplatesHint: "Vuelve a agregar las plantillas predeterminadas que borraste o renombraste. No modifica tus plantillas.",
     templatesEmpty: "Todavía no hay plantillas. Guardá cualquier nota como plantilla con el botón de su fila en la lista de notas.",
     saveAsTemplateTitle: "Guardar como plantilla",
     saveAsTemplateAria: "Guardar como plantilla: ",
@@ -131,7 +139,7 @@ const STRINGS: Record<Language, Strings> = {
     renameTemplateAria: "Renombrar plantilla ",
     deleteTemplateTitle: "Eliminar plantilla",
     deleteTemplateAria: "Eliminar plantilla ",
-    resizeTitle: "Redimensionar panel",
+    resizeTitle: "Redimensionar panel (doble clic: tamaño por defecto)",
     settingsClose: "Cerrar",
     settingsAccentLabel: "Color de acento",
     settingsLangLabel: "Idioma",
@@ -176,7 +184,8 @@ const STRINGS: Record<Language, Strings> = {
     toolbar: {
       bold: "Negrita (Ctrl+B)", italic: "Cursiva (Ctrl+I)", underline: "Subrayado (Ctrl+U)", strike: "Tachado",
       pill: "Píldora de color", pillNone: "Quitar color", textColor: "Color de texto", textColorNone: "Color por defecto",
-      h1: "Título", h2: "Subtítulo", quoteColor: "Cita", quoteColorNone: "Quitar cita", divider: "Línea divisoria",
+      blockType: "Tipo de bloque", paragraph: "Texto normal", h1: "Título 1", h2: "Título 2", h3: "Título 3", toggle: "Desplegable",
+      quoteColor: "Cita", quoteColorNone: "Quitar cita", divider: "Línea divisoria",
       bulletList: "Lista", numberList: "Lista numerada", outdent: "Reducir sangría",
       indent: "Aumentar sangría (sub-lista)", removeFormat: "Quitar formato",
     },
@@ -210,6 +219,8 @@ const STRINGS: Record<Language, Strings> = {
     newNoteDefaultTitle: "New note",
     blankNote: "Blank note",
     templatesLabel: "Templates",
+    restoreTemplates: "Restore default templates",
+    restoreTemplatesHint: "Adds back the default templates you deleted or renamed. Your own templates aren't changed.",
     templatesEmpty: "No templates yet. Save any note as a template with the button on its row in the notes list.",
     saveAsTemplateTitle: "Save as template",
     saveAsTemplateAria: "Save as template: ",
@@ -218,7 +229,7 @@ const STRINGS: Record<Language, Strings> = {
     renameTemplateAria: "Rename template ",
     deleteTemplateTitle: "Delete template",
     deleteTemplateAria: "Delete template ",
-    resizeTitle: "Resize panel",
+    resizeTitle: "Resize panel (double-click: default size)",
     settingsClose: "Close",
     settingsAccentLabel: "Accent color",
     settingsLangLabel: "Language",
@@ -263,7 +274,8 @@ const STRINGS: Record<Language, Strings> = {
     toolbar: {
       bold: "Bold (Ctrl+B)", italic: "Italic (Ctrl+I)", underline: "Underline (Ctrl+U)", strike: "Strikethrough",
       pill: "Color pill", pillNone: "Remove color", textColor: "Text color", textColorNone: "Default color",
-      h1: "Heading", h2: "Subheading", quoteColor: "Quote", quoteColorNone: "Remove quote", divider: "Divider",
+      blockType: "Block type", paragraph: "Normal text", h1: "Heading 1", h2: "Heading 2", h3: "Heading 3", toggle: "Toggle",
+      quoteColor: "Quote", quoteColorNone: "Remove quote", divider: "Divider",
       bulletList: "Bullet list", numberList: "Numbered list", outdent: "Decrease indent",
       indent: "Increase indent (sub-list)", removeFormat: "Clear formatting",
     },

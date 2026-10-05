@@ -165,6 +165,11 @@ body{
   background:var(--bg-default); border:1px solid var(--primary-main); border-radius:5px;
   padding:1px 5px; width:100%;
 }
+.restore-templates-btn{
+  display:block; width:100%; margin-top:4px; padding:8px 14px; border:0; border-top:1px solid var(--divider);
+  background:transparent; color:var(--text-secondary); font:inherit; font-size:11.5px; text-align:left; cursor:pointer;
+}
+.restore-templates-btn:hover, .restore-templates-btn:focus-visible{ color:var(--primary-light); }
 .empty-list{ padding:22px 14px; text-align:center; color:var(--text-disabled); font-size:11.5px; line-height:1.6; }
 
 /* ---- "+" menu: blank note or start from a template ---- */
@@ -196,33 +201,47 @@ body{
 .editor-empty{ flex:1; display:flex; align-items:center; justify-content:center; color:var(--text-disabled); font-size:12.5px; text-align:center; padding:20px; }
 
 .toolbar{
-  flex:0 0 auto; display:flex; align-items:center; gap:1px; flex-wrap:wrap;
-  padding:3px 6px; background:var(--bg-paper); border-bottom:1px solid var(--divider);
+  flex:0 0 auto; display:flex; align-items:center; gap:2px; flex-wrap:wrap;
+  padding:3px 4px; background:var(--bg-paper); border-bottom:1px solid var(--divider);
 }
 .toolbar button{
-  width:24px; height:24px; border-radius:6px; border:0; background:transparent; color:var(--text-secondary);
-  cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700;
+  width:23px; height:23px; padding:0; border-radius:5px; border:0; background:transparent; color:var(--text-secondary);
+  cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700;
 }
-.toolbar button svg{ width:14px; height:14px; }
+.toolbar button svg{ width:17px; height:17px; }
 .toolbar button:hover{ background:color-mix(in srgb, var(--primary-main) 16%, transparent); color:var(--text-primary); }
 .toolbar button.active{ background:color-mix(in srgb, var(--primary-main) 20%, transparent); color:var(--primary-light); }
-.toolbar .tb-sep{ width:1px; align-self:stretch; margin:4px 4px; background:var(--divider); }
+/* Fixed spacing, sized so the whole toolbar fits on one row at the panel's default width (434px)
+   with a little room to spare. */
+.toolbar .tb-sep{ width:1px; align-self:stretch; margin:4px 6px; background:var(--divider); }
 
 .pill-picker{ position:relative; display:inline-flex; }
 .pill-picker .pill-picker-btn{
-  width:24px; height:24px; border-radius:6px; border:0; background:transparent; color:var(--text-secondary);
+  width:23px; height:23px; padding:0; border-radius:5px; border:0; background:transparent; color:var(--text-secondary);
   cursor:pointer; display:flex; align-items:center; justify-content:center;
 }
-.pill-picker .pill-picker-btn svg{ width:14px; height:14px; }
+.pill-picker .pill-picker-btn svg{ width:17px; height:17px; }
 .pill-picker .pill-picker-btn:hover{ background:color-mix(in srgb, var(--primary-main) 16%, transparent); color:var(--text-primary); }
+.pill-picker .block-picker-btn{ width:auto; gap:1px; padding:0 2px 0 4px; font-size:14px; }
+.pill-picker .block-picker-btn svg{ width:12px; height:12px; }
+.block-picker-label{ min-width:16px; text-align:center; }
+.pill-swatches.block-menu{ flex-direction:column; gap:1px; min-width:140px; overflow-x:visible; }
+.toolbar .block-menu button{
+  width:auto; height:auto; justify-content:flex-start; padding:4px 8px; border-radius:5px;
+  font-weight:400; font-size:12.5px; color:var(--text-primary); white-space:nowrap;
+}
+.toolbar .block-menu button.active{ color:var(--primary-light); }
+.toolbar .block-menu .block-item-h1{ font-size:15px; font-weight:700; }
+.toolbar .block-menu .block-item-h2{ font-size:13.5px; font-weight:700; }
+.toolbar .block-menu .block-item-h3{ font-size:12.5px; font-weight:700; }
 .pill-picker .pill-picker-btn.active{ background:color-mix(in srgb, var(--primary-main) 20%, transparent); color:var(--primary-light); }
 .pill-swatches{
   position:absolute; top:calc(100% + 4px); left:0; z-index:40;
-  max-width:min(260px, calc(100vw - 24px)); overflow-x:auto;
+  max-width:min(290px, calc(100vw - 24px)); overflow-x:auto;
   background:var(--bg-solid); border:1px solid var(--divider); border-radius:8px;
   padding:6px; display:flex; flex-wrap:nowrap; gap:5px; box-shadow:0 14px 30px -10px rgba(0,0,0,.5);
 }
-.pill-swatches .pill-swatch{ width:16px; height:16px; border-radius:50%; border:2px solid transparent; padding:0; cursor:pointer; background:var(--sw); }
+.pill-swatches .pill-swatch{ width:16px; height:16px; border-radius:50%; border:2px solid transparent; padding:0; cursor:pointer; background:var(--sw); box-shadow:inset 0 0 0 1px rgba(128,128,128,.4); }
 .pill-swatches .pill-swatch:hover{ border-color:var(--text-primary); }
 .pill-swatches .pill-swatch-none{ background:transparent; border:1px dashed var(--text-disabled); display:flex; align-items:center; justify-content:center; color:var(--text-disabled); }
 .pill-swatches .pill-swatch-none:hover{ color:var(--text-primary); border-color:var(--text-primary); }
@@ -245,21 +264,72 @@ body{
 }
 .editor-surface h1{ font-size:1.35em; margin:.6em 0 .3em; }
 .editor-surface h2{ font-size:1.15em; margin:.6em 0 .3em; }
+.editor-surface h3{ font-size:1em; margin:.6em 0 .3em; }
+/* The toggle level: an h4 that looks exactly like a paragraph. */
+.editor-surface h4{ font-size:1em; font-weight:inherit; margin:0 0 .65em; }
+/* Collapse chevron, in the gutter left of each heading: always shown on toggles (which otherwise look
+   like plain text) and on collapsed headings, on hover for the rest. */
+.editor-surface :is(h1, h2, h3, h4){ position:relative; }
+.editor-surface :is(h1, h2, h3, h4)::before{
+  content:""; position:absolute; left:-15px; top:calc(.825em - 7px); width:14px; height:14px;
+  background:var(--text-secondary); cursor:pointer; opacity:0; transform:rotate(90deg); transition:transform .12s ease, opacity .12s ease;
+  -webkit-mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 4l4 4-4 4' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>") center / 12px no-repeat;
+  mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 4l4 4-4 4' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>") center / 12px no-repeat;
+}
+.editor-surface :is(h1, h2, h3):hover::before{ opacity:.7; }
+.editor-surface h4::before{ opacity:.7; }
+.editor-surface :is(h1, h2, h3, h4)[data-collapsed]::before{ opacity:.9; transform:none; }
+.editor-surface [data-folded]{ display:none; }
+/* One indent step per enclosing section (H1 > H2 > H3 > toggle > text is at most 4 deep). */
+.editor-surface [data-depth="1"]{ margin-left:6px; }
+.editor-surface [data-depth="2"]{ margin-left:12px; }
+.editor-surface [data-depth="3"]{ margin-left:18px; }
+.editor-surface [data-depth="4"]{ margin-left:24px; }
 .editor-surface p{ margin:0 0 .65em; }
 .editor-surface ul, .editor-surface ol{ margin:0 0 .65em; padding-left:1.3em; }
+/* Custom marker text instead of the browser's own disc/number, whose fixed gap before the text was
+   too wide: same symbols per nesting level, followed by a narrow (quarter-em) space. */
+.editor-surface ul{ padding-left:1em; }
+.editor-surface ul > li::marker{ content:"\2022\2006"; font-size:1.3em; }
+.editor-surface ul ul > li::marker{ content:"\25E6\2006"; }
+.editor-surface ul ul ul > li::marker{ content:"\25AA\2006"; }
+/* Numbered lists: 1. / a. / i. per nesting level (then repeating), a bit smaller than the text. */
+.editor-surface ol > li::marker{ content:counter(list-item) ".\2005"; font-size:.9em; }
+.editor-surface ol ol > li::marker{ content:counter(list-item, lower-alpha) ".\2005"; }
+.editor-surface ol ol ol > li::marker{ content:counter(list-item, lower-roman) ".\2005"; }
+.editor-surface ol ol ol ol > li::marker{ content:counter(list-item) ".\2005"; }
+/* Marker in the color of the item's first character (set by syncListMarkerColors). */
+.editor-surface li[style*="--marker-c"]::marker{ color:var(--marker-c); }
 .editor-surface blockquote{
-  margin:.5em 0; padding:2px 12px; border-left:3px solid var(--quote-c, var(--primary-main));
-  color:var(--text-secondary); font-style:italic;
+  margin:.5em 0; padding:2px 12px 2px 8px; border-left:3px solid var(--quote-c, var(--primary-main));
+  font-style:italic;
 }
 .editor-surface a{ color:var(--primary-light); }
 .editor-surface .note-pill{
-  display:inline-block; padding:1px 9px; border-radius:999px;
-  background:color-mix(in srgb, var(--pill-c, var(--primary-main)) 22%, transparent);
-  color:var(--pill-c, var(--primary-light)); font-weight:600; font-size:.92em; line-height:1.5;
+  /* inline (not inline-block) so the caret and selection flow across a pill's edges like any other
+     inline formatting; clone keeps the rounded box intact on each line if a pill wraps. The side
+     margins leave a small clickable gap between the pill and the text around it. */
+  display:inline; padding:2px 9px 3px; margin:0 .2em; border-radius:999px; vertical-align:1px;
+  -webkit-box-decoration-break:clone; box-decoration-break:clone;
+  background:color-mix(in srgb, var(--pill-c, var(--primary-main)) 30%, transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--pill-c, var(--primary-main)) 55%, transparent);
+  /* --pill-text is the pill's own text color as a variable, so a "reset text color" span inside a
+     pill can point back to it (var(--pill-text)) instead of to the base text color. */
+  --pill-text:color-mix(in srgb, var(--pill-c, var(--primary-main)) 50%, var(--text-primary));
+  color:var(--pill-text); font-weight:600; font-size:.92em; line-height:1.5;
 }
+/* A pill with its own line break (Shift+Enter) is drawn as one box spanning both lines, as before
+   pills became inline; as plain inline it would draw a separate rounded box per line. */
+/* Fixed radius matching a one-line pill's end caps: the pill's 999px radius would turn a multi-line
+   box into an oval. */
+.editor-surface .note-pill:has(br){ display:inline-block; border-radius:11px; }
 .editor-surface hr{ border:0; border-top:1px solid var(--divider); margin:1em 0; }
+/* Overlaid on the first (empty) line rather than taking a line of its own, so the caret blinks on the
+   same line the placeholder sits on — where typing actually starts. Offsets match the surface padding. */
+.editor-surface{ position:relative; }
 .editor-surface::before{
   content:attr(data-placeholder); display:none; color:var(--text-disabled); pointer-events:none;
+  position:absolute; top:8px; left:16px; right:16px;
 }
 .editor-surface.is-empty::before{ display:block; }
 

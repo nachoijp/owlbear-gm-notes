@@ -1,4 +1,5 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
+import { sanitizeNoteHtml } from "./sanitizeHtml";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -201,7 +202,7 @@ export function watchCloudNotes(
           notes.push({
             id: change.doc.id,
             title: typeof data.title === "string" ? data.title : "",
-            html: typeof data.html === "string" ? data.html : "",
+            html: typeof data.html === "string" ? sanitizeNoteHtml(data.html) : "",
             updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : Date.now(),
           });
         }
