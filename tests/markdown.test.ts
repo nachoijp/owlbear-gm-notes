@@ -68,6 +68,13 @@ describe("stripHtml", () => {
   it("keeps words in adjacent cells apart", () => {
     expect(stripHtml("<table><tbody><tr><td>one</td><td>two</td></tr></tbody></table>")).toBe("one two");
   });
+
+  it("separates lines, list items and line breaks", () => {
+    expect(stripHtml("<h2>La Tortuga Dragón (barco)</h2><p>dgthdfghdfgh</p><ol><li>asdfasdfas</li><li>b</li></ol>")).toBe(
+      "La Tortuga Dragón (barco) dgthdfghdfgh asdfasdfas b"
+    );
+    expect(stripHtml("<blockquote>a<br>b</blockquote><p>c</p>")).toBe("a b c");
+  });
 });
 
 describe("Markdown tables: empty cells", () => {

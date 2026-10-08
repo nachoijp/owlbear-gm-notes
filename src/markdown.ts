@@ -204,7 +204,7 @@ export function htmlToMarkdown(html: string): string {
     }
   }
   // Sub-lists in this editor sit as a SIBLING of the <li> they nest under, inside the same parent
-  // <ul>/<ol> (see stripAllListsAtSelection's own comment on this) — walking list.children in order
+  // <ul>/<ol> (see structure.ts's repairLists) — walking list.children in order
   // and bumping the indent level whenever a UL/OL turns up between <li>s reproduces that nesting
   // correctly in the output without needing to know about the quirk explicitly.
   function list(el: HTMLElement, depth: number): string {
@@ -292,7 +292,10 @@ export function flattenToInline(html: string): string {
 export function stripHtml(html: string): string {
   const tmp = document.createElement("div");
   tmp.innerHTML = html;
-  // Adjacent cells have no whitespace between them in the markup; without this their words merge.
-  tmp.querySelectorAll("td, th").forEach((c) => c.append(" "));
+  // Adjacent cells, lines and line breaks have no whitespace between them in the markup (the editor
+  // writes none); without this the last word of one line and the first of the next merged into one,
+  // undercounting words and joining lines in note snippets and search.
+  tmp.querySelectorAll("td, th, p, div, h1, h2, h3, h4, blockquote, li, tr").forEach((c) => c.append(" "));
+  tmp.querySelectorAll("br").forEach((br) => br.after(" "));
   return (tmp.textContent || "").replace(/\s+/g, " ").trim();
 }

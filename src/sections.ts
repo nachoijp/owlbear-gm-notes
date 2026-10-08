@@ -150,6 +150,21 @@ export function createSections(ctx: SectionsContext) {
     unfoldAround(neighbor);
     return true;
   }
+  // A selection reaching into a collapsed section takes in its hidden lines too, so deleting or
+  // typing over it would silently remove what can't be seen. An edit over such a selection only
+  // expands those sections instead, the selection still in place — now showing everything it
+  // covers; repeating the edit then applies to all of it in plain sight. Returns whether it did.
+  function unfoldSelection(range?: Range | null): boolean {
+    const sel = window.getSelection();
+    const r = range || (sel && sel.rangeCount && !sel.isCollapsed ? sel.getRangeAt(0) : null);
+    if (!r || r.collapsed) return false;
+    const hidden = (Array.prototype.slice.call(surface.querySelectorAll("[data-folded]")) as HTMLElement[]).filter((el) => r.intersectsNode(el));
+    if (!hidden.length) return false;
+    hidden.forEach((el) => {
+      if (el.hasAttribute("data-folded")) unfoldAround(el);
+    });
+    return true;
+  }
   surface.addEventListener("mousedown", (ev) => {
     const target = ev.target as HTMLElement;
     const heading = target && target.closest ? (target.closest("h1, h2, h3, h4") as HTMLElement | null) : null;
@@ -160,5 +175,5 @@ export function createSections(ctx: SectionsContext) {
     toggleFold(heading);
   });
 
-  return { headingLevel, canExit, exitLevel, applyFolding, sectionStep, stepSection, sel0Block, toggleFold, guardFoldedMerge };
+  return { headingLevel, canExit, exitLevel, applyFolding, sectionStep, stepSection, sel0Block, toggleFold, guardFoldedMerge, unfoldSelection };
 }

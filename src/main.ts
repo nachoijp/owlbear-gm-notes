@@ -13,6 +13,7 @@ import { renderToolbar, BLOCK_TYPES, BLOCK_ONLY_CMDS } from "./toolbar";
 import type { BlockTag } from "./toolbar";
 import { createHistory } from "./history";
 import { createSections } from "./sections";
+import { normalizeStructure, splitBlock, keepingSelection, itemToLine } from "./structure";
 import type { Note } from "./notes";
 import { getPluginId } from "./pluginId";
 import { getTemplates, setTemplates, resolveTemplate, toCustomTemplate, missingBuiltins, newBuiltinTemplate } from "./templates";
@@ -747,6 +748,8 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     undoStack.redo();
   }
   function afterHistoryRestore() {
+    // A snapshot taken before a repair existed (or of a state the browser broke) comes back repaired.
+    repairStructure();
     const n = currentNote();
     if (n) n.html = editorHtml();
     updateEmptyState();
@@ -817,7 +820,8 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       if (blockMenu) blockMenu.hidden = true;
       document.getElementById(idPrefix + "BlockPickerBtn")?.setAttribute("aria-expanded", "false");
     } else if (cmd === "divider") {
-      insertDivider();
+      // A divider replaces the selection: over a collapsed section, it only expands it.
+      if (!sections.unfoldSelection()) insertDivider();
     } else if (cmd === "removeFormat") {
       clearFormatting();
     } else if ((cmd === "indent" || cmd === "outdent") && !caretInList()) {
@@ -827,15 +831,13 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       const block = sel0Block();
       if (block) stepSection(block, cmd === "outdent" ? -1 : 1);
     } else {
-      document.execCommand(cmd, false, value);
-      // Chrome's own insertUnorderedList/insertOrderedList occasionally wraps the new <ul>/<ol>
-      // INSIDE the paragraph it was converting instead of replacing it — most reliably reproduced by
-      // clicking a list button on a fresh note's lone starter paragraph — leaving a <p><ul>...</ul></p>
-      // that every block-detection helper in this file (blockAt included) doesn't know how to see
-      // through, since they all assume lists sit directly under `surface` like every other block.
-      if (cmd === "insertUnorderedList" || cmd === "insertOrderedList") {
-        unwrapNestedLists();
-      }
+      // Outdenting items, or the list button turning its list off: the items are moved as they are,
+      // see outdentSelection.
+      const toggleOff = (cmd === "insertUnorderedList" || cmd === "insertOrderedList") && listIsOn(cmd === "insertUnorderedList" ? "UL" : "OL");
+      const handled = (cmd === "outdent" && outdentSelection()) || (toggleOff && unlistSelection());
+      // Chrome's list commands sometimes wrap the new list INSIDE the paragraph it converts
+      // (<p><ul>…</ul></p>); removeEditorNoise() below repairs that like any other edit.
+      if (!handled) document.execCommand(cmd, false, value);
     }
     removeEditorNoise();
     // Only underline/strikeThrough/removeFormat can change which spans need their decoration-line
@@ -919,8 +921,12 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       pushHistory();
       const color = b.dataset.color;
       if (color) { onColor(color); } else if (onNone) { onNone(); }
+      repairStructure();
       sw.hidden = true;
       btn.setAttribute("aria-expanded", "false");
+      // Back to the note: focus stayed on the (now hidden) swatch, so keys — Ctrl+Z to undo the
+      // color just picked, or simply typing on — went nowhere until the note was clicked again.
+      surface.focus();
       const n = currentNote();
       if (n) n.html = editorHtml();
       scheduleSave();
@@ -992,8 +998,50 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       if (b.tagName === "BLOCKQUOTE") b.style.setProperty("--quote-c", hex);
     });
   }
+  // Only the quotes: lines of another type (or a list) the selection also reaches are left as they are.
   function removeQuote() {
-    if (getTouchedBlocks().some((b) => b.tagName === "BLOCKQUOTE")) setBlockType("P");
+    if (getTouchedBlocks().some((b) => b.tagName === "BLOCKQUOTE")) setBlockType("P", (b) => b.tagName === "BLOCKQUOTE");
+  }
+
+  // The parts of a selection in each line it spans — paragraph, heading, quote line, list item or
+  // table cell. A pill or a color span is inline: one wrapped around a selection that crosses lines
+  // swallowed the lines themselves (list items inside a span inside an item, table cells split in
+  // two), so those get one span per line instead. A selection within one line is used as-is (a
+  // pill across Shift+Enter line breaks stays one pill).
+  const LINE_ELEMENTS = "p, h1, h2, h3, h4, blockquote, li, td, th";
+  function lineRanges(range: Range): Range[] {
+    const lines = (Array.prototype.slice.call(surface.querySelectorAll(LINE_ELEMENTS)) as HTMLElement[]).filter(
+      (el) => !el.querySelector(LINE_ELEMENTS) && range.intersectsNode(el)
+    );
+    if (lines.length <= 1) return [range];
+    return lines
+      .map((el) => {
+        const part = document.createRange();
+        part.selectNodeContents(el);
+        if (part.compareBoundaryPoints(Range.START_TO_START, range) < 0) part.setStart(range.startContainer, range.startOffset);
+        if (part.compareBoundaryPoints(Range.END_TO_END, range) > 0) part.setEnd(range.endContainer, range.endOffset);
+        return part;
+      })
+      .filter((part) => part.toString() !== "");
+  }
+  function wrapRange(range: Range, wrapper: HTMLElement) {
+    try {
+      range.surroundContents(wrapper);
+    } catch {
+      wrapper.appendChild(range.extractContents());
+      range.insertNode(wrapper);
+    }
+  }
+  // Selects from the start of the first element to the end of the last.
+  function selectSpanning(els: HTMLElement[]) {
+    const sel = window.getSelection();
+    if (!sel || !els.length) return;
+    const r = document.createRange();
+    r.setStart(els[0], 0);
+    const last = els[els.length - 1];
+    r.setEnd(last, last.childNodes.length);
+    sel.removeAllRanges();
+    sel.addRange(r);
   }
 
   // Wraps the selection in our own <span style="color:...">, rather than execCommand("foreColor"),
@@ -1011,51 +1059,45 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       document.execCommand("foreColor", false, collapsedHex);
       return;
     }
-    const span = document.createElement("span");
-    span.style.color = hex;
-    try {
-      range.surroundContents(span);
-    } catch {
-      const frag = range.extractContents();
-      span.appendChild(frag);
-      range.insertNode(span);
-    }
-    // Any color already set INSIDE the selection would otherwise keep winning over the new outer
-    // span (the innermost color is the one that paints), so recoloring/resetting a selection that
-    // fully contains an earlier colored run looked like it did nothing.
-    Array.prototype.slice.call(span.querySelectorAll('span[style*="color"], font[color]')).forEach((el: HTMLElement) => {
-      if (el.tagName === "FONT") {
-        el.removeAttribute("color");
-      } else {
-        el.style.color = "";
-      }
-      if (!el.getAttribute("style")) el.removeAttribute("style");
-      if (!el.attributes.length) el.replaceWith(...Array.from(el.childNodes));
-    });
-    // Pills paint their own text color (derived from the pill color), which beats the new outer
-    // span — so a selection spanning pills used to leave their text unchanged. Give each pill inside
-    // the chosen color directly; a reset just drops that override, back to the pill's own color.
     const isReset = hex === "var(--text-primary)";
-    Array.prototype.slice.call(span.querySelectorAll(".note-pill")).forEach((pill: HTMLElement) => {
-      pill.style.color = isReset ? "" : hex;
+    const spans = lineRanges(range).map((part) => {
+      const span = document.createElement("span");
+      span.style.color = hex;
+      wrapRange(part, span);
+      // Any color already set INSIDE the selection would otherwise keep winning over the new outer
+      // span (the innermost color is the one that paints), so recoloring/resetting a selection that
+      // fully contains an earlier colored run looked like it did nothing.
+      Array.prototype.slice.call(span.querySelectorAll('span[style*="color"], font[color]')).forEach((el: HTMLElement) => {
+        if (el.tagName === "FONT") {
+          el.removeAttribute("color");
+        } else {
+          el.style.color = "";
+        }
+        if (!el.getAttribute("style")) el.removeAttribute("style");
+        if (!el.attributes.length) el.replaceWith(...Array.from(el.childNodes));
+      });
+      // Pills paint their own text color (derived from the pill color), which beats the new outer
+      // span — so a selection spanning pills used to leave their text unchanged. Give each pill inside
+      // the chosen color directly; a reset just drops that override, back to the pill's own color.
+      Array.prototype.slice.call(span.querySelectorAll(".note-pill")).forEach((pill: HTMLElement) => {
+        pill.style.color = isReset ? "" : hex;
+      });
+      // A reset entirely inside one pill (e.g. a double-clicked pill) means "back to the pill's own
+      // text color", not the base text color — and if it covers the pill's whole text, the pill's own
+      // color override goes too.
+      const hostPill = span.parentElement && (span.parentElement.closest(".note-pill") as HTMLElement | null);
+      if (isReset && hostPill) {
+        span.style.color = "var(--pill-text)";
+        if (span.textContent === hostPill.textContent) hostPill.style.color = "";
+      }
+      return span;
     });
-    // A reset entirely inside one pill (e.g. a double-clicked pill) means "back to the pill's own
-    // text color", not the base text color — and if it covers the pill's whole text, the pill's own
-    // color override goes too.
-    const hostPill = span.parentElement && (span.parentElement.closest(".note-pill") as HTMLElement | null);
-    if (isReset && hostPill) {
-      span.style.color = "var(--pill-text)";
-      if (span.textContent === hostPill.textContent) hostPill.style.color = "";
-    }
     // Splitting a pill at the selection's edge (extractContents, when the selection starts/ends right
     // at a pill's boundary) can leave an empty pill shell behind, drawn as a tiny blank pill.
     Array.prototype.slice.call(surface.querySelectorAll(".note-pill")).forEach((pill: HTMLElement) => {
       if (pill.textContent === "") pill.remove();
     });
-    sel.removeAllRanges();
-    const newRange = document.createRange();
-    newRange.selectNodeContents(span);
-    sel.addRange(newRange);
+    selectSpanning(spans);
     // Only text color interacts with underline/strikethrough color at all (pills and quote colors
     // don't touch text-decoration) — scoped here instead of unconditionally after every color pick,
     // which used to rescan every colored span in the whole note for pill/quote-color picks too, work
@@ -1133,20 +1175,18 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     if (!sel || !sel.rangeCount) return;
     const range = sel.getRangeAt(0);
     if (!surface.contains(range.commonAncestorContainer) || range.collapsed) return;
-    const span = document.createElement("span");
-    span.className = "note-pill";
-    span.style.setProperty("--pill-c", hex);
-    try {
-      range.surroundContents(span);
-    } catch {
-      const frag = range.extractContents();
-      span.appendChild(frag);
-      range.insertNode(span);
-    }
-    sel.removeAllRanges();
-    const newRange = document.createRange();
-    newRange.selectNodeContents(span);
-    sel.addRange(newRange);
+    // One pill per line the selection spans (see lineRanges); a line where only spaces are selected
+    // gets none, rather than a blank pill.
+    const pills = lineRanges(range)
+      .filter((part) => part.toString().trim() !== "")
+      .map((part) => {
+        const span = document.createElement("span");
+        span.className = "note-pill";
+        span.style.setProperty("--pill-c", hex);
+        wrapRange(part, span);
+        return span;
+      });
+    selectSpanning(pills);
   }
   function removePillAtSelection() {
     pillsInSelection().forEach((pill) => {
@@ -1156,8 +1196,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   }
 
   // The block-level element (P/H1/H2/BLOCKQUOTE/UL/OL) that's a DIRECT CHILD of `surface` and
-  // contains `node` — the level our own block-type toggling and clear-formatting operate at,
-  // mirroring liAt()/topOf() for lists below.
+  // contains `node` — the level our own block-type toggling and clear-formatting operate at.
   function blockAt(node: Node): HTMLElement | null {
     let el = node.nodeType === 3 ? node.parentElement : (node as HTMLElement);
     // A click/selection that lands in the editor's own padding rather than squarely inside a child
@@ -1222,8 +1261,12 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   // exactly what's there now — the selection itself collapses to a single caret position by the time
   // this returns (see placeCaretAtStart below), so re-deriving "what did we just touch" from the
   // selection afterward would only ever see one of them again.
-  function setBlockType(tag: BlockTag): HTMLElement[] {
-    const blocks = getTouchedBlocks();
+  // only: converts just the touched blocks it accepts (and then leaves lists alone).
+  function setBlockType(tag: BlockTag, only?: (block: HTMLElement) => boolean): HTMLElement[] {
+    // Any other type turns the selected list items into lines of that type (a quote keeps a list
+    // whole, inside it).
+    if (tag !== "BLOCKQUOTE" && !only) delistTouchedBlocks();
+    const blocks = only ? getTouchedBlocks().filter(only) : getTouchedBlocks();
     if (!blocks.length) return [];
 
     // Picking the type a block already has is a no-op (the block menu has an explicit "normal text"
@@ -1238,10 +1281,8 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
         result.push(b);
         return;
       }
-      // A list can't become a paragraph by wrapping it (that's the invalid <p><ul> nesting
-      // unwrapNestedLists() exists to undo); lists are turned into text by the list buttons or
-      // clear-formatting, which unpack them item by item first.
-      if (finalTag === "P" && (b.tagName === "UL" || b.tagName === "OL")) return;
+      // Only a quote can hold a list (delistTouchedBlocks already turned any other list into lines).
+      if (finalTag !== "BLOCKQUOTE" && (b.tagName === "UL" || b.tagName === "OL")) return;
       const nb = document.createElement(finalTag);
       if (b.tagName === "UL" || b.tagName === "OL") {
         // A list's <li>s are only valid inside a <ul>/<ol> — unpacking them straight into the new
@@ -1260,6 +1301,14 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
         const exit = exitLevel(b);
         if (exit && canExit(nb)) nb.setAttribute("data-exit", String(exit));
         b.replaceWith(nb);
+        // A quote holding a list, turned into a paragraph/heading: the list goes back to being a
+        // list of its own, after the line, instead of ending up inside it (<p><ul>).
+        const pieces = splitBlock(nb);
+        if (pieces.length !== 1 || pieces[0] !== nb) {
+          if (!firstNew) firstNew = pieces[0];
+          result.push(...pieces);
+          return;
+        }
       }
       if (!firstNew) firstNew = nb;
       result.push(nb);
@@ -1277,35 +1326,11 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     const range = sel.getRangeAt(0);
     if (!surface.contains(range.commonAncestorContainer)) return;
 
-    // stripAllListsAtSelection() tracks precisely which list items the selection touches, via the
-    // LIVE selection — but it collapses that selection to a single caret when it's done (like
-    // setBlockType() does), so if the ORIGINAL selection also spanned a paragraph/heading/quote
-    // outside the list, that part silently stopped being what setBlockType() sees next. Reserve that
-    // precise per-item behavior for the common case (a selection that's ONLY list content); once
-    // other block types are mixed in too, flatten any touched list wholesale instead — the selection
-    // is already asking to convert everything else in the same span down to plain paragraphs, so
-    // preserving exactly which list items were covered stops being worth the added complexity.
     // Cells the selection covers, gathered before anything below moves the selection: they're not
     // blocks (setBlockType leaves tables alone), so their pills/colors are stripped separately.
     const touchedCells = (Array.prototype.slice.call(surface.querySelectorAll("td, th")) as HTMLElement[]).filter((c) => range.intersectsNode(c));
-    const originalBlocks = getTouchedBlocks();
-    const touchesList = originalBlocks.some((b) => b.tagName === "UL" || b.tagName === "OL");
-    const touchesOther = originalBlocks.some((b) => b.tagName !== "UL" && b.tagName !== "OL");
 
-    if (touchesList && touchesOther) {
-      const flattened = originalBlocks.flatMap((b) =>
-        b.tagName === "UL" || b.tagName === "OL" ? flattenListBlock(b) : [b]
-      );
-      if (!flattened.length) return;
-      const spanRange = document.createRange();
-      spanRange.setStart(flattened[0], 0);
-      spanRange.setEnd(flattened[flattened.length - 1], flattened[flattened.length - 1].childNodes.length);
-      sel.removeAllRanges();
-      sel.addRange(spanRange);
-    } else {
-      stripAllListsAtSelection();
-    }
-
+    // Lists included: setBlockType turns the selected items into paragraphs first.
     const blocks = setBlockType("P");
 
     // setBlockType() collapses the selection to a single caret in the FIRST converted block (that's
@@ -1352,6 +1377,44 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
 
     document.execCommand("removeFormat", false, undefined);
   }
+  // The list items a selection actually covers: some of their text, the caret, or the whole item
+  // (an empty one in the middle). Merely touching an item's edge — a triple-clicked line above a
+  // list ends right at the start of its first item — doesn't count.
+  function selectedItems(range: Range): HTMLElement[] {
+    return (Array.prototype.slice.call(surface.querySelectorAll("li")) as HTMLElement[]).filter((li) => {
+      if (li.closest("td, th") || !range.intersectsNode(li)) return false;
+      if (li.contains(range.startContainer) || li === range.startContainer) return true;
+      const part = document.createRange();
+      part.selectNodeContents(li);
+      const startsBefore = part.compareBoundaryPoints(Range.START_TO_START, range) >= 0;
+      const endsAfter = part.compareBoundaryPoints(Range.END_TO_END, range) <= 0;
+      if (startsBefore && endsAfter) return true;
+      if (!startsBefore) part.setStart(range.startContainer, range.startOffset);
+      if (!endsAfter) part.setEnd(range.endContainer, range.endOffset);
+      return part.toString().replace(/[\s\u200b]/g, "") !== "";
+    });
+  }
+  // Turns the list items the selection covers into lines (see itemToLine): just those items — the
+  // rest of their list, their sub-items included, stays a list — leaving the selection spanning
+  // them and the other lines it covered, for setBlockType to convert next.
+  function delistTouchedBlocks() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const items = selectedItems(sel.getRangeAt(0));
+    if (!items.length) return;
+    // Recorded before anything moves: moving the items' content out from under the selection
+    // leaves it pointing elsewhere.
+    const others = getTouchedBlocks().filter((b) => !/^(UL|OL)$/.test(b.tagName) && !(b.tagName === "BLOCKQUOTE" && b.querySelector("li")));
+    const lines = items.map((li) => itemToLine(li, surface)).filter((l): l is HTMLElement => !!l);
+    const all = [...others, ...lines].sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    if (!all.length) return;
+    const last = all[all.length - 1];
+    const span = document.createRange();
+    span.setStart(all[0], 0);
+    span.setEnd(last, last.childNodes.length);
+    sel.removeAllRanges();
+    sel.addRange(span);
+  }
   function placeCaretAtStart(el: HTMLElement) {
     const r = document.createRange();
     r.selectNodeContents(el);
@@ -1362,160 +1425,110 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     sel.addRange(r);
   }
 
-  // Turns one <li> into a <p>. A browser's own execCommand("indent") (our Tab-to-nest) places a
-  // sub-<ul>/<ol> as a SIBLING immediately after the <li> it belongs to, not as that <li>'s child —
-  // so the sub-list's own <li>s are found via nextElementSibling here, flattened recursively too,
-  // and the now-drained sub-list removed - otherwise clearing an item with a sub-list left the
-  // nested bullets behind as their own orphaned list (or, if that sibling <ul> got misidentified as
-  // plain content, a stray <li> ended up wrapped inside a <p>, an invalid, visibly broken result).
-  function flattenListItemToParagraphs(li: HTMLElement): HTMLElement[] {
-    const p = document.createElement("p");
-    Array.prototype.slice.call(li.childNodes).forEach((child: ChildNode) => {
-      p.appendChild(child);
-    });
-    if (!p.hasChildNodes()) p.innerHTML = "<br>";
-    const result: HTMLElement[] = [p];
-    const nextSibling = li.nextElementSibling;
-    if (nextSibling && /^(UL|OL)$/i.test(nextSibling.tagName)) {
-      Array.prototype.slice.call(nextSibling.children).forEach((childLi: HTMLElement) => {
-        if (childLi.tagName === "LI") result.push(...flattenListItemToParagraphs(childLi));
-      });
-      nextSibling.remove();
-    }
-    return result;
-  }
-
-  // Converts EVERY <li> in `list` (its own direct top-level items, recursing into nested sub-lists
-  // the same way flattenListItemToParagraphs already does) into a run of <p> elements replacing the
-  // whole list. Used by clearFormatting() only for the mixed-selection case (a list touched together
-  // with some other block type) — unlike stripAllListsAtSelection() below, this doesn't try to figure
-  // out exactly which items the selection covers, it flattens the entire block.
-  function flattenListBlock(list: HTMLElement): HTMLElement[] {
-    const items = Array.prototype.slice.call(list.children) as HTMLElement[];
-    const result: HTMLElement[] = [];
-    items.forEach((li) => {
-      if (li.tagName === "LI") result.push(...flattenListItemToParagraphs(li));
-    });
-    if (result.length) {
-      list.replaceWith(...result);
-    } else {
-      list.remove();
-    }
-    return result;
-  }
-
-  // Chrome's own editing commands occasionally leave inert residue behind: an empty <span> with
-  // nothing in it, or a <span style="background-color: transparent"> wrapping otherwise-plain text —
-  // background-color is never something this codebase itself sets (bold/italic/pill/quote-color all
-  // use other properties), so a transparent one is always the browser's own no-op leftover, not
-  // anything the user asked for. Neither changes how the note looks, but both get persisted to room
-  // metadata forever otherwise, which matters given the shared 16 KB storage cap.
+  // After the toolbar's own DOM changes and pastes: the same repair every edit gets (see structure.ts).
   function removeEditorNoise() {
-    Array.prototype.slice.call(surface.querySelectorAll("span")).forEach((span: HTMLElement) => {
-      if (span.classList.contains("note-pill")) return;
-      if (span.style.backgroundColor === "transparent") span.style.removeProperty("background-color");
-      if (!span.hasChildNodes()) {
-        span.remove();
-        return;
-      }
-      if (!span.className && !span.getAttribute("style")) {
-        const parent = span.parentNode;
-        if (!parent) return;
-        while (span.firstChild) parent.insertBefore(span.firstChild, span);
-        parent.removeChild(span);
-      }
-    });
+    repairStructure();
+  }
+  // Repairs what the browser's own editing leaves behind (see structure.ts), keeping the selection.
+  // The surface's own text color tells a stray span copying it from a color the GM actually picked.
+  function repairStructure(): boolean {
+    // Read only if a stray span turns up: getComputedStyle forces a style recalculation, and this
+    // runs on every keystroke.
+    const changed = normalizeStructure(surface, { baseColor: () => getComputedStyle(surface).color });
+    // A table the browser left anywhere but the top level (dragged into a list or a quote, or into
+    // another table's cell) goes back there; one lifted out of a line already was, above.
+    const misplaced = Array.prototype.some.call(surface.querySelectorAll("table"), (t: Element) => t.parentElement !== surface);
+    if (misplaced) tables.normalizeTables();
+    return changed || misplaced;
   }
 
-  // Un-nests a <ul>/<ol> that ended up wrapped inside a <p>/<h1>/<h2>/<blockquote> instead of sitting
-  // directly under `surface` like every other block (see the insertUnorderedList/insertOrderedList
-  // call site above). Moves the wrapper's own children — the list, plus anything else it happens to
-  // contain — up to take its place; a wrapper left with nothing afterward is removed entirely.
-  function unwrapNestedLists() {
-    Array.prototype.slice.call(surface.children).forEach((el: HTMLElement) => {
-      if (!/^(P|H[1-4]|BLOCKQUOTE)$/.test(el.tagName)) return;
-      if (!el.querySelector(":scope > ul, :scope > ol")) return;
-      while (el.firstChild) el.parentElement!.insertBefore(el.firstChild, el);
-      el.remove();
-    });
+  // An item of a list sitting at the top level (straight in the note, or in a quote).
+  function isTopLevelItem(li: HTMLElement): boolean {
+    const host = li.parentElement && li.parentElement.parentElement;
+    return !!host && (host === surface || (host.tagName === "BLOCKQUOTE" && host.parentElement === surface));
   }
 
-  // Fully de-lists every top-level item the current selection touches — a plain caret only touches
-  // one, but a drag-selection across several bullets (nested or not) must clear all of them, not
-  // just whichever single <li> happens to be the selection's commonAncestorContainer (which is
-  // often the shared <ul> itself once more than one item is selected, matching no <li> at all).
-  function stripAllListsAtSelection() {
+  // Chrome's own outdent and list toggle rebuild the content of the items they move from computed
+  // styles: a pill came out as text in the pill's color (and bold/strike got copied font sizes). The
+  // items are moved as they are instead — every node kept, the selection with them.
+  //
+  // Outdent (Shift+Tab, Decrease indent): every selected item moves up one level — a top-level one
+  // out of its list, as a line; a sub-item into the list above it (see outdentItems). Returns whether
+  // it did this.
+  function outdentSelection(): boolean {
     const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return;
-    const range = sel.getRangeAt(0);
-
-    function liAt(node: Node): HTMLElement | null {
-      const el = node.nodeType === 3 ? node.parentElement : (node as HTMLElement);
-      return el && el.closest ? (el.closest("li") as HTMLElement | null) : null;
-    }
-    // Climbs from a nested <li> to the top-level <li> that "owns" it. Since a sub-list sits as a
-    // SIBLING of its owning <li> (see flattenListItemToParagraphs above), not as its child, the
-    // relationship to climb is "my list's previous sibling", not "my nearest ancestor <li>".
-    function topOf(li: HTMLElement): HTMLElement {
-      let current = li;
-      for (;;) {
-        const parentList = current.parentElement;
-        if (!parentList || !surface.contains(parentList)) break;
-        const prevSibling = parentList.previousElementSibling;
-        if (prevSibling && prevSibling.tagName === "LI") {
-          current = prevSibling as HTMLElement;
-          continue;
-        }
-        break;
-      }
-      return current;
-    }
-
-    const startLi = liAt(range.startContainer);
-    const endLi = liAt(range.endContainer);
-    let touchedTop: HTMLElement[] = [];
-    if (startLi && surface.contains(startLi)) touchedTop.push(topOf(startLi));
-    if (endLi && surface.contains(endLi)) {
-      const endTop = topOf(endLi);
-      if (!touchedTop.includes(endTop)) touchedTop.push(endTop);
-    }
-    if (!touchedTop.length) return;
-
-    // start/end landed in two different top-level items: sweep every top-level sibling between
-    // them too, so a drag-selection across several bullets clears the whole run.
-    if (touchedTop.length === 2 && touchedTop[0].parentElement === touchedTop[1].parentElement) {
-      const siblings = Array.prototype.slice.call(touchedTop[0].parentElement!.children) as HTMLElement[];
-      const i0 = siblings.indexOf(touchedTop[0]);
-      const i1 = siblings.indexOf(touchedTop[1]);
-      // the slice can include a sibling <ul>/<ol> sitting between two <li>s (a nested sub-list) —
-      // that gets absorbed by its owning <li>'s own flattenListItemToParagraphs call, not processed
-      // as its own "top" item, so filter it out here.
-      touchedTop = siblings.slice(Math.min(i0, i1), Math.max(i0, i1) + 1).filter((el) => el.tagName === "LI");
-    }
-
-    let firstParagraph: HTMLElement | null = null;
-    touchedTop.forEach((topLi) => {
-      const list = topLi.parentElement!;
-      const listParent = list.parentElement!;
-      const paragraphs = flattenListItemToParagraphs(topLi);
-      if (!firstParagraph) firstParagraph = paragraphs[0];
-
-      const afterList = document.createElement(list.tagName);
-      while (topLi.nextSibling) afterList.appendChild(topLi.nextSibling);
-      topLi.remove();
-
-      let insertAfter: HTMLElement = list;
-      paragraphs.forEach((p) => {
-        listParent.insertBefore(p, insertAfter.nextSibling);
-        insertAfter = p;
-      });
-      if (afterList.childNodes.length) {
-        listParent.insertBefore(afterList, insertAfter.nextSibling);
-      }
-      if (!list.hasChildNodes()) list.remove();
+    if (!sel || !sel.rangeCount) return false;
+    const items = selectedItems(sel.getRangeAt(0));
+    if (!items.length) return false;
+    keepingSelection(surface, () => {
+      // Which ones are top-level is decided first: a sub-item moved up becomes one, and stays an item.
+      const top = items.filter(isTopLevelItem);
+      outdentItems(items.filter((li) => !isTopLevelItem(li)));
+      top.forEach((li) => itemToLine(li, surface));
+      return true;
     });
-
-    if (firstParagraph) placeCaretAtStart(firstParagraph);
+    return true;
+  }
+  // The list button turning its list off: every selected item becomes a line, sub-items included.
+  function unlistSelection(): boolean {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    const items = selectedItems(sel.getRangeAt(0));
+    if (!items.length) return false;
+    keepingSelection(surface, () => items.map((li) => itemToLine(li, surface)).some(Boolean));
+    return true;
+  }
+  // Moves sub-items up one level: into the list above, right after the sub-list they were in, each
+  // with its own sub-items (which move up with it); the items after them in that sub-list become
+  // sub-items of the last one — as in a word processor. Selected items of the same sub-list move
+  // together, shallower sub-lists first; a selected item carried up along with its parent has
+  // already moved its one level, so it isn't moved again.
+  function outdentItems(nested: HTMLElement[]) {
+    const done = new Set<HTMLElement>();
+    const depth = (el: HTMLElement) => {
+      let d = 0;
+      for (let p = el.parentElement; p && p !== surface; p = p.parentElement) d++;
+      return d;
+    };
+    const groups = new Map<HTMLElement, HTMLElement[]>();
+    nested.forEach((li) => {
+      const sub = li.parentElement as HTMLElement;
+      if (!groups.has(sub)) groups.set(sub, []);
+      groups.get(sub)!.push(li);
+    });
+    Array.from(groups.entries())
+      .sort((a, b) => depth(a[0]) - depth(b[0]))
+      .forEach(([, all]) => {
+        const group = all.filter((li) => !done.has(li));
+        if (!group.length) return;
+        const sub = group[0].parentElement;
+        if (!sub || !sub.parentElement || !/^(UL|OL)$/.test(sub.parentElement.tagName)) return;
+        const kids = Array.prototype.slice.call(sub.childNodes) as Node[];
+        const at = group.map((li) => kids.indexOf(li)).filter((i) => i >= 0);
+        if (!at.length) return;
+        const i0 = Math.min(...at);
+        let i1 = Math.max(...at);
+        const next = kids[i1 + 1];
+        if (next && next.nodeType === 1 && /^(UL|OL)$/.test((next as Element).tagName)) i1++;
+        const moved = kids.slice(i0, i1 + 1);
+        const rest = kids.slice(i1 + 1);
+        let cursor: Node = sub;
+        moved.forEach((n) => {
+          cursor.parentNode!.insertBefore(n, cursor.nextSibling);
+          cursor = n;
+          if (n.nodeType === 1) nested.forEach((li) => { if ((n as Element).contains(li)) done.add(li); });
+        });
+        if (rest.some((n) => n.nodeType === 1)) {
+          // Joined to the sub-list that moved up with the last item, if there's one: one list, not
+          // two side by side.
+          const last = cursor as Element;
+          const into = last.tagName === sub.tagName ? last : null;
+          const after = into || (sub.cloneNode(false) as HTMLElement);
+          rest.forEach((n) => after.appendChild(n));
+          if (!into) last.after(after);
+        }
+        if (!sub.children.length) sub.remove();
+      });
   }
 
   // Inserts <hr> as a sibling of the whole block the caret is in (splitting it if needed),
@@ -1535,7 +1548,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
 
     // A caret anywhere inside a list — top-level or nested — resolves `block` to the WHOLE <ul>/<ol>
     // (nested sub-lists sit as siblings of their owning <li> inside the same outer list, not inside
-    // it, so blockAt() always climbs all the way to the outermost list; see stripAllListsAtSelection).
+    // it, so blockAt() always climbs all the way to the outermost list; see structure.ts's repairLists).
     // Splitting that the same way a paragraph gets split below would extract raw text/inline content
     // straight into a freshly cloned list with no <li> wrapper around it — invalid markup that renders
     // with no bullet and misaligned, the same class of breakage the quote-wrapping-a-list bug was.
@@ -1640,35 +1653,47 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       document.execCommand("delete");
     }
   }
+  // Cutting a selection that reaches into a collapsed section only expands it (see sections.ts).
+  surface.addEventListener("cut", (ev: ClipboardEvent) => {
+    if (sections.unfoldSelection()) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+  });
   surface.addEventListener("copy", (ev: ClipboardEvent) => onCopy(ev, false));
   surface.addEventListener("cut", (ev: ClipboardEvent) => onCopy(ev, true));
 
   surface.addEventListener("paste", (ev: ClipboardEvent) => {
     ev.preventDefault();
+    // Pasting over a selection reaching into a collapsed section only expands it (see sections.ts).
+    if (sections.unfoldSelection()) return;
     const own = ev.clipboardData?.getData(CLIPBOARD_TYPE) ?? "";
     const text = ev.clipboardData?.getData("text/plain") ?? "";
     if (!own && !text) return;
     startEditStep();
+    insertTransfer(own, text);
+  });
+  // Inserts pasted or dropped content at the selection: `own` is content in our own format (from
+  // this editor), `text` anyone else's plain text.
+  function insertTransfer(own: string, text: string) {
     // Into a table cell, everything goes in as inline content (cells hold no blocks): our own
     // formatted content flattened, anyone else's text as literal text (no Markdown), its lines
     // becoming line breaks.
     if (tables.selectionCell()) {
-      if (!own && !/[\r\n]/.test(text)) {
+      if (own) {
+        insertOwnHtml(flattenToInline(sanitizeNoteHtml(own)));
+        return;
+      }
+      if (!/[\r\n]/.test(text)) {
         document.execCommand("insertText", false, text);
         return;
       }
-      const html = own ? sanitizeNoteHtml(own) : text.replace(/\r\n?/g, "\n").split("\n").map(escapeHtml).join("<br>");
-      document.execCommand("insertHTML", false, flattenToInline(html));
+      document.execCommand("insertHTML", false, text.replace(/\r\n?/g, "\n").split("\n").map(escapeHtml).join("<br>"));
       removeEditorNoise();
-      syncTextDecorationColors();
       return;
     }
     if (own) {
-      document.execCommand("insertHTML", false, sanitizeNoteHtml(own));
-      unwrapNestedLists();
-      tables.normalizeTables();
-      removeEditorNoise();
-      syncTextDecorationColors();
+      insertOwnHtml(sanitizeNoteHtml(own));
       return;
     }
     if (!text) return;
@@ -1681,10 +1706,246 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       return;
     }
     document.execCommand("insertHTML", false, html);
-    unwrapNestedLists();
     tables.normalizeTables();
     removeEditorNoise();
+  }
+
+  // Inserts content in our own format at the selection as nodes, not through execCommand("insertHTML"):
+  // Chrome rewrites what insertHTML inserts to match the computed styles around it, so a pill pasted
+  // next to plain text arrived as a span of its computed color, with no pill class. Blocks landing
+  // inside a line split it around them (repairStructure), so each pasted block keeps its type.
+  function insertOwnHtml(html: string) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !surface.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+    // The browser's own delete merges the lines a selection spans, as typing over it would.
+    if (!sel.isCollapsed) document.execCommand("delete");
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const last = tpl.content.lastChild;
+    if (!last) return;
+    if (insertItemsIntoList(tpl.content)) return;
+    if (tpl.content.querySelector(".note-pill")) leavePillAtCaret();
+    sel.getRangeAt(0).insertNode(tpl.content);
+    // The caret goes after what was inserted: at the end of its last line when that's a block, so
+    // typing doesn't land loose between blocks.
+    const end = document.createRange();
+    if (last.nodeType === 1 && /^(P|H[1-4]|BLOCKQUOTE|UL|OL|TABLE|DIV)$/.test((last as Element).tagName)) {
+      end.selectNodeContents(last);
+      end.collapse(false);
+    } else {
+      end.setStartAfter(last);
+    }
+    sel.removeAllRanges();
+    sel.addRange(end);
+    tables.normalizeTables();
+    syncTextDecorationColors();
+    // Saves like any edit, and repairs the line the content landed in (see the input listener).
+    surface.dispatchEvent(new Event("input"));
+  }
+
+  // Content with pills of its own, inserted with the caret inside a pill, would put a pill inside a
+  // pill: the pill is split at the caret first, and the caret put between the two halves.
+  function leavePillAtCaret() {
+    const sel = window.getSelection()!;
+    const r = sel.getRangeAt(0);
+    const start = r.startContainer.nodeType === 3 ? r.startContainer.parentElement : (r.startContainer as HTMLElement);
+    const pill = start && (start.closest(".note-pill") as HTMLElement | null);
+    if (!pill || !surface.contains(pill)) return;
+    const tail = document.createRange();
+    tail.setStart(r.startContainer, r.startOffset);
+    tail.setEnd(pill, pill.childNodes.length);
+    const rest = pill.cloneNode(false) as HTMLElement;
+    rest.appendChild(tail.extractContents());
+    pill.after(rest);
+    const between = document.createRange();
+    between.setStartAfter(pill);
+    between.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(between);
+    // An empty half is dropped by the repair after the insert.
+  }
+
+  // List items pasted or dropped with the caret in a list item join that list, right after the item
+  // (the item's text after the caret following them as an item of its own), rather than landing
+  // inside the item — which made them a sub-list, a level deeper than they were. Into an empty item,
+  // they replace it. Only when what's inserted is nothing but lists; returns whether it did this.
+  function insertItemsIntoList(content: DocumentFragment): boolean {
+    const sel = window.getSelection()!;
+    const r = sel.getRangeAt(0);
+    const start = r.startContainer.nodeType === 3 ? r.startContainer.parentElement : (r.startContainer as HTMLElement);
+    const li = start && (start.closest("li") as HTMLElement | null);
+    if (!li || !surface.contains(li) || li.closest("td, th")) return false;
+    const nodes = Array.prototype.slice.call(content.childNodes) as Node[];
+    const lists = nodes.filter((n) => !(n.nodeType === 3 && !(n as Text).data.trim()));
+    if (!lists.length || !lists.every((n) => n.nodeType === 1 && /^(UL|OL)$/.test((n as Element).tagName))) return false;
+    const tail = document.createRange();
+    tail.setStart(r.startContainer, r.startOffset);
+    tail.setEnd(li, li.childNodes.length);
+    const rest = tail.extractContents();
+    let cursor: Element = li;
+    let lastItem: HTMLElement | null = null;
+    lists.forEach((list) => {
+      (Array.prototype.slice.call((list as Element).childNodes) as Node[]).forEach((n) => {
+        if (n.nodeType !== 1) return;
+        cursor.after(n);
+        cursor = n as Element;
+        const items = (n as Element).tagName === "LI" ? [n as HTMLElement] : (Array.prototype.slice.call((n as Element).querySelectorAll("li")) as HTMLElement[]);
+        if (items.length) lastItem = items[items.length - 1];
+      });
+    });
+    const restText = (rest.textContent || "").replace(/\u200b/g, "").trim();
+    if (restText || (rest as DocumentFragment).querySelector?.(".note-pill")) {
+      const item = document.createElement("li");
+      item.appendChild(rest);
+      cursor.after(item);
+    }
+    if (!(li.textContent || "").replace(/\u200b/g, "").trim() && !li.querySelector(".note-pill")) li.remove();
+    if (lastItem) {
+      const end = document.createRange();
+      end.selectNodeContents(lastItem);
+      end.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(end);
+    }
+    syncTextDecorationColors();
+    surface.dispatchEvent(new Event("input"));
+    return true;
+  }
+
+  // Drag and drop goes through the same path as copy/paste. Left to the browser, a drop inserted
+  // another page's HTML as-is (its fonts, colors, links, images — none of which the sanitizer lets
+  // in through paste) and moved dragged blocks into places they can't be (a list into a table cell).
+  // A drag from this editor carries our own format, like a copy; dropping it moves it (Ctrl/Alt:
+  // copies it), as the browser would.
+  let dragSource: Range | null = null;
+  const DROP_MARKER = "data-drop-point";
+  surface.addEventListener("dragstart", (ev: DragEvent) => {
+    const html = selectionHtml();
+    const sel = window.getSelection();
+    if (html === null || !ev.dataTransfer || !sel || !sel.rangeCount) return;
+    ev.dataTransfer.setData("text/plain", sel.toString().replace(/\u200b/g, ""));
+    ev.dataTransfer.setData("text/html", html);
+    ev.dataTransfer.setData(CLIPBOARD_TYPE, html);
+    // A live range: it follows the dragged content as the drop inserts before it.
+    dragSource = sel.getRangeAt(0).cloneRange();
   });
+  surface.addEventListener("dragend", () => {
+    dragSource = null;
+  });
+  function caretRangeAt(x: number, y: number): Range | null {
+    if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(x, y);
+      if (!pos) return null;
+      const r = document.createRange();
+      r.setStart(pos.offsetNode, pos.offset);
+      return r;
+    }
+    return document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+  }
+  surface.addEventListener("drop", (ev: DragEvent) => {
+    ev.preventDefault();
+    const source = dragSource;
+    dragSource = null;
+    const own = ev.dataTransfer?.getData(CLIPBOARD_TYPE) ?? "";
+    const text = ev.dataTransfer?.getData("text/plain") ?? "";
+    if (!own && !text) return;
+    const at = caretRangeAt(ev.clientX, ev.clientY);
+    if (!at || !surface.contains(at.startContainer)) return;
+    // Moving a selection that reaches into a collapsed section would remove what's hidden there:
+    // the drop only expands it (see sections.ts).
+    if (source && !(ev.ctrlKey || ev.altKey) && sections.unfoldSelection(source)) return;
+    // Dropped back onto itself: nothing moves.
+    if (source && source.isPointInRange(at.startContainer, at.startOffset)) return;
+    const sel = window.getSelection()!;
+    surface.focus();
+    startEditStep();
+    if (source && !source.collapsed && !(ev.ctrlKey || ev.altKey)) {
+      // A move: the original goes first, then the copy lands where it was dropped. The drop point is
+      // held by a marker node, not a range: deleting (and the repair after it) can move or rebuild
+      // the nodes around it, which leaves a range pointing somewhere else — the copy (or the
+      // deletion, the other way round) then landed on the wrong text. A node moves along with them.
+      const marker = document.createElement("wbr");
+      marker.setAttribute(DROP_MARKER, "");
+      at.insertNode(marker);
+      const wholeLines = coversWholeLines(source);
+      sel.removeAllRanges();
+      sel.addRange(source);
+      document.execCommand("delete");
+      tidyAfterMove(wholeLines);
+      const back = document.createRange();
+      if (marker.isConnected) {
+        back.setStartBefore(marker);
+        marker.remove();
+      } else {
+        back.setStart(at.startContainer, at.startOffset);
+      }
+      back.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(back);
+    } else {
+      sel.removeAllRanges();
+      sel.addRange(at);
+    }
+    insertTransfer(own, text);
+    updateToolbarState();
+  });
+  // Whether a selection runs from the very start of its first line to the very end of its last —
+  // moving it takes whole lines, so none should stay behind empty.
+  function coversWholeLines(range: Range): boolean {
+    const lineOf = (node: Node) => {
+      const el = node.nodeType === 3 ? node.parentElement : (node as HTMLElement);
+      return el ? (el.closest(LINE_ELEMENTS) as HTMLElement | null) : null;
+    };
+    const first = lineOf(range.startContainer);
+    const last = lineOf(range.endContainer);
+    if (!first || !last) return false;
+    const before = document.createRange();
+    before.selectNodeContents(first);
+    before.setEnd(range.startContainer, range.startOffset);
+    const after = document.createRange();
+    after.selectNodeContents(last);
+    after.setStart(range.endContainer, range.endOffset);
+    return before.toString().replace(/\u200b/g, "") === "" && after.toString().replace(/\u200b/g, "") === "";
+  }
+  // After a drag moved text away (the caret where it was): the line it took whole doesn't stay
+  // behind as an empty line or bullet, and a word taken from between two spaces doesn't leave both.
+  function tidyAfterMove(wholeLines: boolean) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) return;
+    const node = sel.anchorNode!;
+    const el = node.nodeType === 3 ? node.parentElement : (node as HTMLElement);
+    const line = el ? (el.closest(LINE_ELEMENTS) as HTMLElement | null) : null;
+    if (!line || !surface.contains(line)) return;
+    // A line holding the drop point's marker isn't empty: what's being moved lands there.
+    const isEmpty = !(line.textContent || "").replace(/\u200b/g, "").trim() && !line.querySelector(`.note-pill, hr, [${DROP_MARKER}]`);
+    if (wholeLines && isEmpty && !/^(TD|TH)$/.test(line.tagName) && surface.children.length > 1) {
+      const next = (line.nextElementSibling || line.previousElementSibling) as HTMLElement | null;
+      line.remove();
+      if (next) placeCaretAtStart(next);
+      surface.dispatchEvent(new Event("input"));
+      return;
+    }
+    // Chrome can leave the two spaces in separate text nodes: joined first (live ranges, the caret
+    // and the drop point included, follow along).
+    const host = node.parentNode;
+    if (!host) return;
+    host.normalize();
+    const at = window.getSelection()!;
+    if (!at.anchorNode || at.anchorNode.nodeType !== 3) return;
+    const t = at.anchorNode as Text;
+    const caret = at.anchorOffset;
+    const space = /[ \u00a0]/;
+    if (caret > 0 && caret < t.data.length && space.test(t.data[caret - 1]) && space.test(t.data[caret])) {
+      t.deleteData(caret - 1, 1);
+      // Chrome keeps the space it leaves as a non-breaking one; between two words it's an ordinary
+      // space again (one that lets the line wrap there).
+      const kept = caret - 1;
+      if (t.data[kept] === "\u00a0" && kept > 0 && kept + 1 < t.data.length && !space.test(t.data[kept - 1]) && !space.test(t.data[kept + 1])) {
+        t.replaceData(kept, 1, " ");
+      }
+      surface.dispatchEvent(new Event("input"));
+    }
+  }
   function noteTyping() {
     if (undoStack.restoring()) return;
     if (!typingBurstTimer) pushHistory();
@@ -1698,7 +1959,15 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     pushHistory();
     if (typingBurstTimer) { clearTimeout(typingBurstTimer); typingBurstTimer = null; }
   }
-  surface.addEventListener("beforeinput", noteTyping);
+  surface.addEventListener("beforeinput", (ev: InputEvent) => {
+    // Typing or deleting over a selection that reaches into a collapsed section: expand it first
+    // (see sections.ts), so nothing hidden goes without being seen.
+    if (ev.cancelable && sections.unfoldSelection()) {
+      ev.preventDefault();
+      return;
+    }
+    noteTyping();
+  });
   // A pill's trailing edge: Chrome treats "end of the pill's text" and "start of whatever follows it"
   // as the same caret spot, draws the caret inside the pill there, and keeps typed text inside it —
   // and when a pill ends its paragraph there's no outside spot at all. So "outside" gets its own
@@ -1847,6 +2116,15 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   }).observe(surface, { childList: true });
   tables.normalizeTables();
   applyFolding();
+  // A note broken before this repair existed (or by a path it doesn't cover yet) is fixed on opening
+  // and saved right away — locally only, like the fold state: no new "edited" time, not marked for
+  // the cloud. A fresh time would make this device's copy "newer" than an edit made on another
+  // device that hasn't arrived here yet (cloud sync is last-write-wins), so merely opening a note
+  // could overwrite that edit. The repaired version reaches the cloud with the next real edit.
+  if (repairStructure()) {
+    seed.html = editorHtml();
+    void persist();
+  }
 
   // Collapsing/expanding is saved locally only: it neither bumps the note's "edited" time (which
   // would reorder the note list) nor marks it for cloud sync. The state rides along to the cloud
@@ -1883,7 +2161,9 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     sel.removeAllRanges();
     sel.addRange(r);
   }
-  surface.addEventListener("input", () => {
+  surface.addEventListener("input", (ev) => {
+    // Moving nodes mid-composition (accents, IME input) would cut it short; compositionend repairs.
+    if (!(ev as InputEvent).isComposing) repairStructure();
     ensureBlockWrapper();
     if (pillAnchor && pillAnchor.data !== PILL_ANCHOR) releasePillAnchor();
     const n = currentNote();
@@ -1892,12 +2172,23 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     scheduleWordCountUpdate();
     scheduleSave();
   });
+  surface.addEventListener("compositionend", () => {
+    if (!repairStructure()) return;
+    const n = currentNote();
+    if (n) n.html = editorHtml();
+    scheduleSave();
+  });
   surface.addEventListener("keydown", (ev) => {
     const key = ev.key.toLowerCase();
     const isUndo = (ev.ctrlKey || ev.metaKey) && !ev.shiftKey && key === "z";
     const isRedo = (ev.ctrlKey || ev.metaKey) && (key === "y" || (ev.shiftKey && key === "z"));
     if (isUndo) { ev.preventDefault(); undo(); return; }
     if (isRedo) { ev.preventDefault(); redo(); return; }
+    // Keys that replace a selection, over one reaching into a collapsed section: expand it first
+    // (see sections.ts). Here too, not only in beforeinput: some of these keys have handlers below
+    // that edit before the browser would.
+    const replacesSelection = ev.key === "Enter" || ev.key === "Backspace" || ev.key === "Delete" || (ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey);
+    if (replacesSelection && sections.unfoldSelection()) { ev.preventDefault(); return; }
     // → at a pill's last character steps just outside it instead of skipping past the next
     // character, so there's a way to put the caret right after a pill (see pillEndingAtCaret).
     if (guardFoldedMerge(ev)) return;
@@ -1933,7 +2224,8 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
         // A plain Enter in a collapsed heading expands it first: the new line would otherwise land
         // inside the hidden section (with the caret in it), and Chrome copies the heading's
         // attributes onto the half it splits off, which would duplicate the collapsed state.
-        if (block.hasAttribute("data-collapsed")) { block.removeAttribute("data-collapsed"); applyFolding(); }
+        // The undo step starts here, before expanding, so undoing the Enter folds it back too.
+        if (block.hasAttribute("data-collapsed")) { noteTyping(); block.removeAttribute("data-collapsed"); applyFolding(); }
       }
     }
     const plainArrow = !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey;
@@ -1968,7 +2260,8 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     }
     ev.preventDefault();
     pushHistory();
-    document.execCommand(ev.shiftKey ? "outdent" : "indent", false, undefined);
+    if (!(ev.shiftKey && outdentSelection())) document.execCommand(ev.shiftKey ? "outdent" : "indent", false, undefined);
+    repairStructure();
     const n = currentNote();
     if (n) n.html = editorHtml();
     scheduleSave();
@@ -1993,12 +2286,28 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     updateToolbarState();
   });
 
+  // Whether the selection starts or ends in a list item. Read from the DOM: Chrome's own
+  // queryCommandState said "not in a list" for some selections spanning nested items (a sub-item
+  // to its own sub-item), so Shift+Tab there moved sections instead of outdenting.
   function caretInList(): boolean {
-    try {
-      return document.queryCommandState("insertUnorderedList") || document.queryCommandState("insertOrderedList");
-    } catch {
-      return false;
-    }
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    const r = sel.getRangeAt(0);
+    const inItem = (n: Node) => {
+      const el = n.nodeType === 3 ? n.parentElement : (n as HTMLElement);
+      const li = el && (el.closest("li") as HTMLElement | null);
+      return !!li && surface.contains(li) && !li.closest("td, th");
+    };
+    return inItem(r.startContainer) || inItem(r.endContainer);
+  }
+  // Whether the list button for `tag` lists is "on" here: the selection is all list content, every
+  // selected item in a list of that kind. (queryCommandState misread some nested selections.)
+  function listIsOn(tag: "UL" | "OL"): boolean {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    const items = selectedItems(sel.getRangeAt(0));
+    const onlyLists = getTouchedBlocks().every((b) => /^(UL|OL)$/.test(b.tagName) || (b.tagName === "BLOCKQUOTE" && !!b.querySelector("li")));
+    return items.length > 0 && onlyLists && items.every((li) => li.parentElement!.tagName === tag);
   }
   function updateEmptyState() {
     // No text AND no text-less structure (a list item, divider or quote), which the placeholder,

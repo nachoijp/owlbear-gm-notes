@@ -6,6 +6,7 @@ import { sanitizeTemplate } from "./templates";
 import type { Template } from "./templates";
 import { sanitizeNoteHtml } from "./sanitizeHtml";
 import { htmlToMarkdown, markdownToHtml } from "./markdown";
+import { normalizeHtml } from "./structure";
 
 interface NoteExportFile {
   type: "gm-notes-note";
@@ -16,7 +17,7 @@ interface NoteExportFile {
   updatedAt: number;
 }
 function noteToExportPayload(note: Note): NoteExportFile {
-  return { type: "gm-notes-note", version: 1, id: note.id, title: note.title, html: note.html, updatedAt: note.updatedAt };
+  return { type: "gm-notes-note", version: 1, id: note.id, title: note.title, html: normalizeHtml(note.html), updatedAt: note.updatedAt };
 }
 // A built-in template is exported as just its marker (empty title/html) — it carries no text of its
 // own, and whichever GM Notes imports it already knows its text in every language.
@@ -35,7 +36,7 @@ function templateToExportPayload(template: Template): TemplateExportFile {
     version: 1,
     id: template.id,
     title: template.title,
-    html: template.html,
+    html: normalizeHtml(template.html),
     updatedAt: template.updatedAt,
     ...(template.builtin ? { builtin: template.builtin } : {}),
   };
@@ -79,7 +80,7 @@ export function exportNote(note: Note, format: ExportFormat, untitled: string) {
     const blob = new Blob([JSON.stringify(noteToExportPayload(note), null, 2)], { type: "application/json" });
     downloadBlob(blob, safeFileName(note.title, untitled) + ".json");
   } else {
-    const blob = new Blob([htmlToMarkdown(note.html)], { type: "text/markdown" });
+    const blob = new Blob([htmlToMarkdown(normalizeHtml(note.html))], { type: "text/markdown" });
     downloadBlob(blob, safeFileName(note.title, untitled) + ".md");
   }
 }
@@ -115,13 +116,13 @@ export async function exportAll(notes: Note[], templates: Template[], format: Ex
   }
   const noteNames = new Set<string>();
   notes.forEach((n) => {
-    const content = format === "json" ? JSON.stringify(noteToExportPayload(n), null, 2) : htmlToMarkdown(n.html);
+    const content = format === "json" ? JSON.stringify(noteToExportPayload(n), null, 2) : htmlToMarkdown(normalizeHtml(n.html));
     addUnique(noteNames, "", n.title, content);
   });
   const templateNames = new Set<string>();
   const folder = opts.templatesFolder + "/";
   exportedTemplates.forEach((t) => {
-    const content = format === "json" ? JSON.stringify(templateToExportPayload(t), null, 2) : htmlToMarkdown(t.html);
+    const content = format === "json" ? JSON.stringify(templateToExportPayload(t), null, 2) : htmlToMarkdown(normalizeHtml(t.html));
     addUnique(templateNames, folder, opts.templateTitle(t), content);
   });
   const blob = await zip.generateAsync({ type: "blob" });
@@ -138,7 +139,7 @@ function parseImportedNote(json: string): Note | null {
     return null;
   }
   const sanitized = sanitizeNote(data);
-  return sanitized ? { ...sanitized, html: sanitizeNoteHtml(sanitized.html), id: freshNoteId() } : null;
+  return sanitized ? { ...sanitized, html: normalizeHtml(sanitizeNoteHtml(sanitized.html)), id: freshNoteId() } : null;
 }
 
 // A Markdown file carries no title/id of its own — the filename (minus extension) becomes the title,
@@ -161,7 +162,7 @@ function parseImportedTemplate(json: string, inTemplateFolder: boolean): Templat
   const declared = (data as { type?: unknown } | null)?.type === "gm-notes-template";
   if (!declared && !inTemplateFolder) return null;
   const sanitized = sanitizeTemplate(data);
-  return sanitized ? { ...sanitized, html: sanitizeNoteHtml(sanitized.html), id: "t" + freshNoteId() } : null;
+  return sanitized ? { ...sanitized, html: normalizeHtml(sanitizeNoteHtml(sanitized.html)), id: "t" + freshNoteId() } : null;
 }
 
 export interface ImportedContent {

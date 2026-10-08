@@ -302,6 +302,9 @@ body{
 .editor-surface [data-depth="4"]{ margin-left:24px; }
 .editor-surface p{ margin:0 0 .65em; }
 .editor-surface ul, .editor-surface ol{ margin:0 0 .65em; padding-left:1.3em; }
+/* Only a whole list ends with a paragraph's gap: a sub-list ending mid-list goes straight on to the
+   next (shallower) item. */
+.editor-surface :is(ul, ol) :is(ul, ol){ margin:0; }
 /* Custom marker text instead of the browser's own disc/number, whose fixed gap before the text was
    too wide: same symbols per nesting level, followed by a narrow (quarter-em) space. */
 .editor-surface ul{ padding-left:1em; }
