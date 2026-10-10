@@ -122,6 +122,9 @@ beyond that one sign-in. It's entirely optional and only you can see
 your own notes; signing in doesn't share anything with players or other
 GMs.
 
+Need this manual again? Settings → Help → View manual opens it in a new
+tab.
+
 ![Settings, backup, and storage stats](docs/screenshot-settings.png)
 
 ## Support

@@ -99,6 +99,9 @@ export interface Strings {
   settingsClose: string;
   settingsAccentLabel: string;
   settingsLangLabel: string;
+  settingsHelpLabel: string;
+  helpHint: string;
+  helpLink: string;
   settingsStorageLabel: string;
   storageMeterText: (usedKB: string) => string;
   storageBannerGeneric: string;
@@ -174,6 +177,9 @@ const STRINGS: Record<Language, Strings> = {
     settingsClose: "Cerrar",
     settingsAccentLabel: "Color de acento",
     settingsLangLabel: "Idioma",
+    settingsHelpLabel: "Ayuda",
+    helpHint: "Abre el manual de GM Notes (el README en GitHub) en una pestaña nueva.",
+    helpLink: "Ver manual",
     settingsStorageLabel: "Espacio usado en este dispositivo",
     storageMeterText: (usedKB) => `${usedKB} KB`,
     storageBannerGeneric: "No se pudo guardar el último cambio. Si estás en una ventana privada o con el almacenamiento del navegador bloqueado, probá desactivarlo para esta página.",
@@ -274,6 +280,9 @@ const STRINGS: Record<Language, Strings> = {
     settingsClose: "Close",
     settingsAccentLabel: "Accent color",
     settingsLangLabel: "Language",
+    settingsHelpLabel: "Help",
+    helpHint: "Opens the GM Notes manual (the README on GitHub) in a new tab.",
+    helpLink: "View manual",
     settingsStorageLabel: "Storage used on this device",
     storageMeterText: (usedKB) => `${usedKB} KB`,
     storageBannerGeneric: "Couldn't save your last change. If you're in a private window or have browser storage blocked, try allowing it for this page.",

@@ -440,6 +440,7 @@ body{
 .backup-row{ display:flex; gap:6px; align-items:center; }
 .backup-row + .backup-row{ margin-top:6px; }
 .cloud-account-email{ font-size:11.5px; color:var(--text-secondary); font-family:var(--font-mono); }
+a.opt-btn{ display:inline-block; text-decoration:none; }
 .opt-btn{
   font-family:var(--font-ui); font-size:12px; font-weight:600; color:var(--text-secondary);
   background:transparent; border:1px solid var(--divider); border-radius:7px;

@@ -2569,6 +2569,9 @@ function applyLanguage() {
   document.getElementById("settingsStorageLabel")!.textContent = s.settingsStorageLabel;
   document.getElementById("settingsAccentLabel")!.textContent = s.settingsAccentLabel;
   document.getElementById("settingsLangLabel")!.textContent = s.settingsLangLabel;
+  document.getElementById("settingsHelpLabel")!.textContent = s.settingsHelpLabel;
+  document.getElementById("helpHint")!.textContent = s.helpHint;
+  document.getElementById("helpLink")!.textContent = s.helpLink;
   document.getElementById("settingsBackupLabel")!.textContent = s.settingsBackupLabel;
   document.getElementById("backupHint")!.textContent = s.backupHint;
   document.getElementById("exportAllBtn")!.textContent = s.exportAllBtn;
