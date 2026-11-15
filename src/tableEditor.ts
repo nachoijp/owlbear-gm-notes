@@ -187,6 +187,8 @@ export interface TableEditorContext {
   // The top-level block (direct child of surface) containing `node`.
   blockAt: (node: Node) => HTMLElement | null;
   placeCaretAtStart: (el: HTMLElement) => void;
+  // A collapsed range at the text position under a point on screen (null if there's none).
+  caretRangeAt: (x: number, y: number) => Range | null;
   // Records an undo step before a change.
   pushHistory: () => void;
   // Records an undo step for typing, grouped with the keystrokes around it.
@@ -1075,6 +1077,139 @@ export function createTableEditor(ctx: TableEditorContext) {
     return true;
   }
 
+  // Plain arrows in a cell move the caret through its text as usual. At the text's edge in that
+  // direction (its start / end, its first / last line) they go to the neighboring cell on the grid,
+  // merged cells included: Chrome took ↓ to the next cell in reading order, not the one below. Past
+  // the table's side, ← / → wrap to the previous / next row; past its top / bottom, the caret leaves
+  // for the line above / below the table (or stays put when there's none).
+  type ArrowDir = "up" | "down" | "left" | "right";
+  const ARROWS: Record<string, ArrowDir> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+  function handleArrowKeys(ev: KeyboardEvent): boolean {
+    const dir = ARROWS[ev.key];
+    if (!dir || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return false;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
+    const caret = sel.getRangeAt(0);
+    const cell = cellAt(caret.startContainer);
+    if (!cell || !atCellEdge(cell, caret, dir)) return false;
+    const table = cell.closest("table") as HTMLTableElement;
+    const x = caretRect(caret)?.left ?? null;
+    ev.preventDefault();
+    const target = neighborCell(table, cell, dir, x);
+    if (target) {
+      enterAt(target, dir, x);
+    } else {
+      // Out of the table: the nearest visible line on that side (folded lines are skipped).
+      const back = dir === "up" || dir === "left";
+      let block = (back ? table.previousElementSibling : table.nextElementSibling) as HTMLElement | null;
+      while (block && !block.getClientRects().length) block = (back ? block.previousElementSibling : block.nextElementSibling) as HTMLElement | null;
+      if (block && block.tagName !== "HR") enterAt(block, dir, x);
+    }
+    ctx.updateToolbarState();
+    return true;
+  }
+  // Where the caret is drawn. A collapsed range at an empty line has no box of its own: then the
+  // line break it sits at stands in for it.
+  function caretRect(r: Range): DOMRect | null {
+    const box = r.getBoundingClientRect();
+    if (box.height > 0) return box;
+    const node = r.startContainer;
+    const near = node.nodeType === 1 ? node.childNodes[r.startOffset] || node.childNodes[r.startOffset - 1] : node.parentElement;
+    if (near && near.nodeType === 1) {
+      const b = (near as Element).getBoundingClientRect();
+      if (b.height > 0) return b;
+    }
+    return null;
+  }
+  // The vertical extent of an element's text lines (null when it has none, e.g. an empty cell).
+  function textLines(el: HTMLElement): { top: number; bottom: number } | null {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    const rects = Array.prototype.filter.call(r.getClientRects(), (b: DOMRect) => b.height > 0) as DOMRect[];
+    if (!rects.length) return null;
+    return { top: Math.min(...rects.map((b) => b.top)), bottom: Math.max(...rects.map((b) => b.bottom)) };
+  }
+  function atCellEdge(cell: HTMLTableCellElement, caret: Range, dir: ArrowDir): boolean {
+    if (dir === "up" || dir === "down") {
+      const box = caretRect(caret);
+      const lines = textLines(cell);
+      // Without boxes to measure, the text decides: no line break before (↑) / after (↓) the caret.
+      if (box && lines) {
+        const half = box.height / 2;
+        return dir === "up" ? box.top - lines.top < half : lines.bottom - box.bottom < half;
+      }
+      if (box && !lines) return true;
+    }
+    const back = dir === "up" || dir === "left";
+    const edge = document.createRange();
+    edge.selectNodeContents(cell);
+    if (back) edge.setEnd(caret.startContainer, caret.startOffset);
+    else edge.setStart(caret.startContainer, caret.startOffset);
+    if (!isBlankText(edge.toString())) return false;
+    // A line break between the caret and the edge is a line still to go through. A trailing <br>
+    // doesn't count: it only holds the cell's last line open.
+    let last: Node = cell;
+    while (last.lastChild) last = last.lastChild;
+    const breaks = edge.cloneContents().querySelectorAll("br").length;
+    const placeholder = !back && last.nodeName === "BR" && edge.intersectsNode(last) ? 1 : 0;
+    return breaks <= placeholder;
+  }
+  // The cell next to `cell` on the grid in that direction. Up / down pick, among the cells of the
+  // next row under a merged cell, the one under the caret's x.
+  function neighborCell(table: HTMLTableElement, cell: HTMLTableCellElement, dir: ArrowDir, x: number | null): HTMLTableCellElement | null {
+    const grid = buildGrid(table);
+    const gc = grid.of.get(cell);
+    if (!gc) return null;
+    if (dir === "left" || dir === "right") {
+      const col = dir === "left" ? gc.col - 1 : gc.col + gc.colSpan;
+      const side = grid.slots[gc.row][col];
+      if (side) return side.el;
+      const cells = tableCells(table);
+      return cells[cells.indexOf(cell) + (dir === "left" ? -1 : 1)] || null;
+    }
+    const row = dir === "up" ? gc.row - 1 : gc.row + gc.rowSpan;
+    if (row < 0 || row >= grid.rows) return null;
+    const slots = grid.slots[row];
+    let pick: HTMLTableCellElement | null = null;
+    for (let k = gc.col; k < gc.col + gc.colSpan; k++) {
+      const s = slots[k];
+      if (!s) continue;
+      if (!pick) pick = s.el;
+      const b = s.el.getBoundingClientRect();
+      if (x !== null && x >= b.left && x < b.right) return s.el;
+    }
+    if (pick) return pick;
+    for (let k = Math.min(gc.col, slots.length - 1); k >= 0; k--) if (slots[k]) return slots[k]!.el;
+    return null;
+  }
+  // Puts the caret in `el` coming from that direction: ← at its end, → at its start; ↑ / ↓ on its
+  // last / first line, under the caret's x when that lands inside it.
+  function enterAt(el: HTMLElement, dir: ArrowDir, x: number | null) {
+    el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const sel = window.getSelection()!;
+    if ((dir === "up" || dir === "down") && x !== null) {
+      const b = el.getBoundingClientRect();
+      const lines = textLines(el);
+      const y = lines ? (dir === "up" ? lines.bottom - 2 : lines.top + 2) : b.top + b.height / 2;
+      const r = ctx.caretRangeAt(Math.min(Math.max(x, b.left + 1), b.right - 1), y);
+      const into = r && (r.startContainer === el || el.contains(r.startContainer));
+      // Into a table, only inside one of its cells.
+      if (r && into && (el.tagName !== "TABLE" || cellAt(r.startContainer))) {
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+        return;
+      }
+    }
+    const back = dir === "up" || dir === "left";
+    if (el.tagName === "TABLE") {
+      const cells = tableCells(el);
+      if (back) caretToCellEnd(cells[cells.length - 1]);
+      else ctx.placeCaretAtStart(cells[0]);
+    } else if (back) caretToCellEnd(el);
+    else ctx.placeCaretAtStart(el);
+  }
+
   return {
     cellAt,
     selectionInTable,
@@ -1088,5 +1223,6 @@ export function createTableEditor(ctx: TableEditorContext) {
     handleEnter,
     handleEdgeKeys,
     handleMoveKeys,
+    handleArrowKeys,
   };
 }

@@ -95,8 +95,18 @@ export function exportNote(note: Note, format: ExportFormat, untitled: string) {
   }
 }
 
+// A folder of the note list, as export needs it: its name and the folder it's in.
+export interface ExportFolder {
+  id: string;
+  name: string;
+  parentId: string | null;
+}
+
 export interface ExportAllOptions {
   untitled: string;
+  // The note list's folders: the zip has the same folders, each note in its own.
+  folders: ExportFolder[];
+  noteFolder: (n: Note) => string | null;
   // The zip folder templates go in (named in the exporting GM's language).
   templatesFolder: string;
   // A template's file name: a built-in is named after its current-language title, for readability.
@@ -108,7 +118,7 @@ export async function exportAll(notes: Note[], templates: Template[], format: Ex
   // every GM Notes install already has the built-ins anyway, so only the GM's own templates go there.
   const exportedTemplates = format === "json" ? templates : templates.filter((t) => !t.builtin);
   if (!notes.length && !exportedTemplates.length) return;
-  if (notes.length === 1 && !exportedTemplates.length) {
+  if (notes.length === 1 && !exportedTemplates.length && !opts.folders.length) {
     exportNote(notes[0], format, opts.untitled);
     return;
   }
@@ -124,10 +134,38 @@ export async function exportAll(notes: Note[], templates: Template[], format: Ex
     usedNames.add(name);
     zip.file(folder + name + ext, content);
   }
-  const noteNames = new Set<string>();
+  // Each folder's path in the zip ("NPCs/Villains/"), its name made unique among its siblings. At the
+  // top, the templates folder's names are taken: a folder of the GM's called that gets a "-2".
+  const dirOf = new Map<string | null, string>([[null, ""]]);
+  const takenIn = new Map<string, Set<string>>([["", new Set(TEMPLATE_FOLDER_NAMES.concat(opts.templatesFolder.toLowerCase()))]]);
+  const nameIn = (dir: string, name: string) => {
+    const taken = takenIn.get(dir) ?? new Set<string>();
+    takenIn.set(dir, taken);
+    const base = safeFileName(name, opts.untitled);
+    let unique = base;
+    let i = 2;
+    while (taken.has(unique.toLowerCase())) unique = `${base}-${i++}`;
+    taken.add(unique.toLowerCase());
+    return unique;
+  };
+  const dirFor = (id: string | null, seen = new Set<string>()): string => {
+    if (dirOf.has(id)) return dirOf.get(id)!;
+    const f = opts.folders.find((x) => x.id === id);
+    if (!f || seen.has(f.id)) return "";
+    seen.add(f.id);
+    const parent = dirFor(f.parentId, seen);
+    const dir = parent + nameIn(parent, f.name) + "/";
+    dirOf.set(id, dir);
+    zip.folder(dir); // empty folders too
+    return dir;
+  };
+  opts.folders.forEach((f) => dirFor(f.id));
+  const noteNames = new Map<string, Set<string>>();
   notes.forEach((n) => {
     const content = format === "json" ? JSON.stringify(noteToExportPayload(n), null, 2) : htmlToMarkdown(normalizeHtml(n.html));
-    addUnique(noteNames, "", n.title, content);
+    const dir = dirFor(opts.noteFolder(n));
+    if (!noteNames.has(dir)) noteNames.set(dir, new Set());
+    addUnique(noteNames.get(dir)!, dir, n.title, content);
   });
   const templateNames = new Set<string>();
   const folder = opts.templatesFolder + "/";
@@ -182,33 +220,56 @@ function parseImportedTemplate(json: string, inTemplateFolder: boolean): Templat
 export interface ImportedContent {
   notes: Note[];
   templates: Template[];
+  // From a zip: the folders a note sat in (by name, outermost first; absent: the top), and every
+  // folder found (empty ones included).
+  notePaths: Map<string, string[]>;
+  folderPaths: string[][];
 }
 
-async function importFromJsonText(json: string, inTemplateFolder: boolean, into: ImportedContent) {
+async function importFromJsonText(json: string, inTemplateFolder: boolean, into: ImportedContent, path: string[] = []) {
   const template = parseImportedTemplate(json, inTemplateFolder);
   if (template) {
     into.templates.push(template);
     return;
   }
   const note = parseImportedNote(json);
-  if (note) into.notes.push(note);
+  if (!note) return;
+  // A note file says nothing about folders of the list it came from: only where it sits in the zip does.
+  delete note.folderId;
+  delete note.folderAt;
+  into.notes.push(note);
+  if (path.length) into.notePaths.set(note.id, path);
 }
 
 export async function contentFromImportFile(file: File, untitled: string): Promise<ImportedContent> {
-  const result: ImportedContent = { notes: [], templates: [] };
+  const result: ImportedContent = { notes: [], templates: [], notePaths: new Map(), folderPaths: [] };
   if (/\.zip$/i.test(file.name)) {
     const { default: JSZip } = await import("jszip");
     const zip = await JSZip.loadAsync(file);
-    for (const entry of Object.values(zip.files)) {
-      if (entry.dir) continue;
-      const entryName = entry.name.split("/").pop() || entry.name;
+    // macOS's resource-fork copies (__MACOSX/…, ._name) aren't anything of the GM's.
+    const entries = Object.values(zip.files).filter((e) => !/(^|\/)__MACOSX\//.test(e.name) && !/(^|\/)\._/.test(e.name));
+    const names = entries.map((e) => e.name);
+    for (const entry of entries) {
       const inTemplateFolder = isInTemplateFolder(entry.name);
+      const parts = entry.name.split("/").filter(Boolean);
+      const entryName = parts[parts.length - 1] || entry.name;
+      const isNote = !entry.dir && /\.(json|md)$/i.test(entryName);
+      // The folders it sits in (the templates folder isn't one of the list's). Only a note's folders,
+      // or an empty folder (an empty folder of the list, exported): a folder of images or other
+      // files isn't one of the GM's.
+      const emptyDir = entry.dir && !names.some((n) => n !== entry.name && n.startsWith(entry.name));
+      const path = inTemplateFolder ? [] : emptyDir ? parts : isNote ? parts.slice(0, -1) : [];
+      if (path.length && !result.folderPaths.some((p) => p.join("/") === path.join("/"))) result.folderPaths.push(path);
+      if (entry.dir) continue;
       if (/\.json$/i.test(entryName)) {
-        await importFromJsonText(await entry.async("text"), inTemplateFolder, result);
+        await importFromJsonText(await entry.async("text"), inTemplateFolder, result, path);
       } else if (/\.md$/i.test(entryName)) {
         const fromMarkdown = noteFromMarkdownFile(entryName, await entry.async("text"), untitled);
         if (inTemplateFolder) result.templates.push({ ...fromMarkdown, id: "t" + freshNoteId() });
-        else result.notes.push(fromMarkdown);
+        else {
+          result.notes.push(fromMarkdown);
+          if (path.length) result.notePaths.set(fromMarkdown.id, path);
+        }
       }
     }
     return result;

@@ -1,6 +1,6 @@
 ---
 title: GM Notes
-description: Keep prep, secrets and stat blocks one click away — a GM journal with tables, folding sections, templates and player sharing.
+description: Keep prep, secrets and stat blocks one click away — a GM journal with folders, tables, folding sections, templates and player sharing.
 author: Ignacio Pedraza
 image: https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/header.png
 icon: https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/public/logo.svg
@@ -26,11 +26,20 @@ you shared, to read or, if you let them, to edit.
    bold/italic, lists, quotes, dividers, tables) is recognized automatically and
    converted to real formatting, and copying between notes keeps all your
    formatting.
-3. Switch between notes and search them from the dropdown at the top.
+3. Switch between notes, search them, and organize them in folders from
+   the dropdown at the top.
 
 ![Pills in every color, and toggles that fold the lines under them](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-formatting.png)
 
 ![Switching between notes: search, a pinned note, the ⋯ menu and the sort order](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-notes.png)
+
+## Folders
+
+Group your notes in folders and subfolders — NPCs, places, sessions, one
+per arc. Add notes and subfolders from a folder's **⋯** menu, and move
+things with **Move to…** or by dragging them: a line shows exactly where
+they'll land. Searching shows only the folders with a match, and deleting
+a folder sends its notes to the trash, so nothing is lost by accident.
 
 ## Collapsible sections
 
@@ -39,7 +48,8 @@ scan and you open only the part you need at the table. **Toggles** look
 like normal text but fold the lines below them — perfect for secrets,
 stat blocks, or read-aloud text. A small indent shows which section each
 line belongs to, and **Decrease indent** (or **Shift+Tab**) steps a line out
-of a section to keep writing outside it.
+of a section to keep writing outside it. Double-click the empty space
+below your note to start a fresh line outside every section.
 
 ![A toggle open, another folded, a folded heading, and lines that stepped out of them](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-collapsible.png)
 
@@ -48,7 +58,8 @@ of a section to keep writing outside it.
 Insert a table from the toolbar and build it up from the table menu: header
 rows and columns, cell colors, merged cells, and rows and columns you can
 drag into place. Drag a column's border to resize it, or double-click it to
-fit the column to its text. Tables wider than the panel scroll sideways.
+fit the column to its text. The arrow keys move from cell to cell, and
+tables wider than the panel scroll sideways.
 
 ![A table showing off its headers, colors, and merged cells](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-tables.png)
 
@@ -103,9 +114,10 @@ Each note stays on the device you wrote it on. To bring a note somewhere
 else, or just keep a backup, export it — one note or all of them at once —
 as JSON (keeps everything exactly as it was) or Markdown (a plain-text
 copy you can read or edit anywhere), and import the file back whenever
-you want. Exporting all your notes includes your templates too.
+you want. Exporting all your notes includes your templates and keeps your
+folders.
 
-Want your notes and templates on more than one device automatically?
+Want your notes, folders, and templates on more than one device automatically?
 Sign in with Google from Settings — that's the only setup needed. It's entirely
 optional, and only you can see your own notes, except the ones you
 share.

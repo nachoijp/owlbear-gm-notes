@@ -35,8 +35,10 @@ https://notes.ijpedraza.com/manifest.json
   [Collapsible sections](#collapsible-sections) below.
 - Multiple notes per room, with search and a quick switcher. **Pin** the
   notes you use most to keep them at the top, and sort the rest by most
-  recent or A–Z. Each note's **⋯** menu duplicates it, saves it as a
-  template, or exports it.
+  recent or A–Z. Each note's **⋯** menu duplicates it, moves it to a
+  folder, saves it as a template, or exports it.
+- **Folders**: organize your notes in folders and subfolders — see
+  [Folders](#folders) below.
 - **Trash**: a deleted note goes to the trash (at the bottom of the notes
   list) for 30 days, so you can restore it or delete it for good. With
   cloud sync, the trash follows you to your other devices too.
@@ -59,7 +61,8 @@ https://notes.ijpedraza.com/manifest.json
 - **Export and import**: save a note (or all of them at once) as a file, and
   bring it back whenever you want. Choose JSON to keep everything exactly
   as it was, or Markdown for a plain-text copy you can read or edit
-  anywhere else.
+  anywhere else. Exporting everything keeps your folders, and importing
+  it puts each note back in its folder.
 - Personal accent color and language (English/Spanish) per player.
 - Resizable panel: drag the corner handle, or double-click it to return to
   the default size.
@@ -67,6 +70,30 @@ https://notes.ijpedraza.com/manifest.json
 ![Pills in every color, and toggles that fold the lines under them](docs/screenshot-formatting.png)
 
 ![Switching between notes: search, a pinned note, the ⋯ menu and the sort order](docs/screenshot-notes.png)
+
+## Folders
+
+Group your notes the way you think about your campaign — NPCs, places,
+sessions, one folder per arc — in folders up to three levels deep.
+
+- **New folder** sits at the bottom of the notes list. A folder's **⋯**
+  menu adds a note or a subfolder inside it, renames it, moves it, or
+  deletes it.
+- Click a folder to fold or unfold it. Each one shows how many notes it
+  holds, its subfolders' included.
+- **Move** a note or a folder with **Move to…** in its **⋯** menu, or drag
+  it: onto a folder to put it inside, onto a note to put it next to it, or
+  to the bottom of the list to take it out of every folder. A line shows
+  exactly where it will land.
+- Moving a note doesn't count as editing it: it keeps its place in the
+  "most recent" order.
+- **Searching** shows only the folders with a match, open. Search for a
+  folder's name to see everything in it.
+- **Deleting a folder** asks first, telling you how many notes and
+  subfolders it holds. Its notes go to the trash, where you can restore
+  them for 30 days.
+- Players don't see your folders: they get a simple list of the notes you
+  share.
 
 ## Collapsible sections
 
@@ -85,6 +112,9 @@ see just its outline, then open only the part you need at the table.
   **Increase indent** (or **Tab**) puts it back.
 - Lines are indented a little for each section they're inside, so you can
   always see which heading or toggle a line belongs to.
+- **Double-click empty space** to start a new line there. Below the last
+  line, it starts outside every heading and toggle; between two lines, it
+  joins the section it lands in.
 - Folding a section doesn't count as editing the note: it won't move the
   note to the top of your list.
 
@@ -99,6 +129,9 @@ with everything else:
 - **Headers**: make the first row, the first column, or both into headers.
 - **Colors**: paint a cell, a whole row, or a whole column.
 - **Merge and split** cells, to the right or down.
+- **Move between cells** with the arrow keys: at the edge of a cell's text,
+  they go to the cell above, below, or beside it. **Tab** goes to the next
+  cell (and adds a row at the end).
 - **Move rows and columns**: drag the dots to the left of a row or above a
   column, or use **Alt+Shift+arrows**.
 - **Widths**: drag a column's border to resize it, or double-click the
@@ -248,8 +281,8 @@ Each note is saved on the device you wrote it on. To bring a note
 somewhere else, or just keep a backup, export it (or all your notes at
 once, from Settings) and import the file wherever you need it.
 
-Want your notes and templates on more than one device automatically?
-Sign in with Google from Settings and they'll sync in the background — no setup
+Want your notes, folders, and templates on more than one device
+automatically? Sign in with Google from Settings and they'll sync in the background — no setup
 beyond that one sign-in. It's entirely optional and only you can see
 your own notes; signing in doesn't share anything with players or other
 GMs. Only the notes you make public are shared, and only with the

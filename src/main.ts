@@ -2,7 +2,7 @@ import OBR from "@owlbear-rodeo/sdk";
 import "./style.css";
 import { getStrings } from "./i18n";
 import type { Language, Strings } from "./i18n";
-import { getNotes, setNotes, getTrash, setTrash, getErased, setErased, notesStorageBytes } from "./notes";
+import { getNotes, setNotes, getTrash, setTrash, getErased, setErased, notesStorageBytes, getFolders, setFolders, getFoldedFolders, setFoldedFolders, getErasedFolders, setErasedFolders, FOLDER_MAX_DEPTH } from "./notes";
 import { sanitizeNoteHtml } from "./sanitizeHtml";
 import { escapeHtml, markdownToHtml, flattenToInline, stripHtml } from "./markdown";
 import { exportNote as exportNoteFile, exportAll, contentFromImportFile, isDuplicateTemplate } from "./importExport";
@@ -17,7 +17,7 @@ import { SECRET_ATTR, SECRET_MODEL, SECRET_TAGS, blockUnits, expandSecretMarks, 
 import { LINK_ATTR, linkElement, linkedIds, syncLinks } from "./noteLinks";
 import type { LinkTarget } from "./noteLinks";
 import { normalizeStructure, splitBlock, keepingSelection, itemToLine, markPills, restorePills } from "./structure";
-import type { Note } from "./notes";
+import type { Note, Folder } from "./notes";
 import { getPluginId } from "./pluginId";
 import { getTemplates, setTemplates, resolveTemplate, toCustomTemplate, missingBuiltins, newBuiltinTemplate } from "./templates";
 import type { Template } from "./templates";
@@ -41,6 +41,9 @@ import {
   flushCloudSync,
   watchCloudNotes,
   watchCloudTemplates,
+  pushFolder,
+  deleteFolderFromCloud,
+  watchCloudFolders,
   pushTemplate,
   deleteTemplateFromCloud,
   setSharedKey,
@@ -61,6 +64,16 @@ import type { User } from "firebase/auth";
 
 // ---------- state ----------
 let notes: Note[] = [];
+// The list's folders (see Folder in notes.ts), and which ones are folded on this device.
+let folders: Folder[] = [];
+let foldedFolders = new Set<string>();
+// False until the stored folders have been read: saving before that would wipe them.
+let foldersLoaded = false;
+// Folders deleted here that the cloud may not have heard about yet (see folderSync.ts).
+let erasedFolders = new Set<string>();
+function saveErasedFolders() {
+  void setErasedFolders(Array.from(erasedFolders)).catch((err) => console.error("Notes: failed to save deleted folders", err));
+}
 // Deleted notes, restorable for 30 days (see the trash section), and whether the switcher shows them.
 let trash: Note[] = [];
 let trashView = false;
@@ -149,7 +162,7 @@ function strings(): Strings {
 
 async function persist(): Promise<boolean> {
   try {
-    await Promise.all([setNotes(notes), setTrash(trash)]);
+    await Promise.all([setNotes(notes), setTrash(trash), foldersLoaded ? setFolders(folders) : null]);
     hideStorageBanner();
     updateStorageMeter();
     return true;
@@ -270,7 +283,26 @@ function updateSwitcherHeader() {
   switcherCountEl.textContent = String(viewNotes().length);
 }
 
+// The list's order: pinned first (the GM's own list only), then by title or by last edit.
+function sortNotes(ns: Note[], readOnly = isPlayerView()): Note[] {
+  const untitled = strings().untitled;
+  const byTitle = (n: Note) => (n.title || untitled).toLocaleLowerCase(language);
+  return ns.slice().sort((a, b) => {
+    if (!readOnly && !!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+    if (!readOnly && noteSort === "alpha") return byTitle(a).localeCompare(byTitle(b), language);
+    return b.updatedAt - a.updatedAt;
+  });
+}
+
 function renderList() {
+  folderIndex = buildFolderIndex();
+  try {
+    renderListNow();
+  } finally {
+    folderIndex = null;
+  }
+}
+function renderListNow() {
   updateTrashChrome();
   updateSortButton();
   closeRowMenu();
@@ -283,134 +315,616 @@ function renderList() {
   const s = strings();
 
   const readOnly = isPlayerView();
-  if (!list.length) {
+  // Players see a flat list; the GM sees the folders (see renderFolderLevel), while searching only
+  // those with a match.
+  const flat = readOnly;
+  const search = !flat && searchTerm ? folderSearch(searchTerm, list) : null;
+  if (!list.length && (flat || !folders.length || (search && !search.show.size))) {
     const empty = viewNotes().length ? escapeHtml(s.emptySearch) : readOnly ? escapeHtml(sharedEmptyMessage()) : s.emptyList;
     noteListEl.innerHTML = `<div class="empty-list">${empty}</div>`;
     return;
   }
 
   noteListEl.innerHTML = "";
-  const byTitle = (n: Note) => (n.title || s.untitled).toLocaleLowerCase(language);
-  list
-    .slice()
-    .sort((a, b) => {
-      if (!readOnly && !!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
-      if (!readOnly && noteSort === "alpha") return byTitle(a).localeCompare(byTitle(b), language);
-      return b.updatedAt - a.updatedAt;
-    })
-    .forEach((n) => {
-      const item = document.createElement("div");
-      item.className = "note-item" + (n.id === (readOnly ? playerActiveId : activeId) ? " active" : "");
-      item.dataset.id = n.id;
+  const sorted = (ns: Note[]) => sortNotes(ns, readOnly);
+  const noteItem = (n: Note): HTMLElement => {
+    const item = document.createElement("div");
+    item.className = "note-item" + (n.id === (readOnly ? playerActiveId : activeId) ? " active" : "");
+    item.dataset.id = n.id;
+    if (!flat) makeDraggable(item, () => ({ note: n }));
 
-      const row = document.createElement("div");
-      row.className = "note-item-row";
+    const row = document.createElement("div");
+    row.className = "note-item-row";
 
-      const title = document.createElement("span");
-      title.className = "title";
-      title.textContent = n.title || s.untitled;
+    const title = document.createElement("span");
+    title.className = "title";
+    title.textContent = n.title || s.untitled;
 
-      // Players only ever see public notes: for them, the dot marks the ones they can edit.
-      if (n.public && (!readOnly || n.editable)) {
-        const dot = document.createElement("span");
-        dot.className = "public-dot" + (n.editable ? " editable" : "");
-        dot.title = n.editable ? (readOnly ? s.editableDotPlayerTitle : s.editableDotTitle) : s.publicDotTitle;
-        dot.setAttribute("role", "img");
-        dot.setAttribute("aria-label", dot.title);
-        row.appendChild(dot);
-      }
+    // Players only ever see public notes: for them, the dot marks the ones they can edit.
+    if (n.public && (!readOnly || n.editable)) {
+      const dot = document.createElement("span");
+      dot.className = "public-dot" + (n.editable ? " editable" : "");
+      dot.title = n.editable ? (readOnly ? s.editableDotPlayerTitle : s.editableDotTitle) : s.publicDotTitle;
+      dot.setAttribute("role", "img");
+      dot.setAttribute("aria-label", dot.title);
+      row.appendChild(dot);
+    }
 
-      // Pin: in the grid, always shown on a pinned note, on hover for the rest.
-      const pin = document.createElement("button");
-      pin.className = "row-btn pin-btn" + (n.pinned ? " pinned" : "");
-      pin.title = n.pinned ? s.unpinTitle : s.pinTitle;
-      pin.setAttribute("aria-label", pin.title + ": " + (n.title || s.untitled));
-      pin.setAttribute("aria-pressed", String(!!n.pinned));
-      pin.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.8 14.2 6.5l-2 .6-2.6 2.6.3 3.3-1.4 1.4-2.7-2.7L2.3 15 1 13.7l3.5-3.5-2.7-2.7 1.4-1.4 3.3.3 2.6-2.6.4-2Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
-      pin.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        void togglePin(n.id);
-      });
-
-      const moreBtn = document.createElement("button");
-      moreBtn.className = "row-btn more-btn";
-      moreBtn.title = s.moreActions;
-      moreBtn.setAttribute("aria-label", s.moreActions + ": " + (n.title || s.untitled));
-      moreBtn.setAttribute("aria-haspopup", "menu");
-      moreBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/></svg>';
-      moreBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        openRowMenu(moreBtn, n);
-      });
-
-      const editBtn = document.createElement("button");
-      editBtn.className = "row-btn edit-btn";
-      editBtn.title = s.renameTitle;
-      editBtn.setAttribute("aria-label", s.renameAria + (n.title || s.untitled));
-      editBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M11 2.5 13.5 5 5.8 12.7l-3 .6.6-3L11 2.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
-      editBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        startRename(item, n);
-      });
-
-      const del = document.createElement("button");
-      del.className = "row-btn del-btn";
-      del.title = s.deleteTitle;
-      del.setAttribute("aria-label", s.deleteAria + (n.title || s.untitled));
-      del.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none">${TRASH_ICON_PATH}</svg>`;
-      del.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        void deleteNote(n.id);
-      });
-
-      row.appendChild(title);
-
-      // A grid beside the whole item (not inline after the title) so the title keeps most of the
-      // row's width: rename and delete; pin, and "more" (duplicate, save as template, export) last.
-      const actions = document.createElement("div");
-      actions.className = "row-actions";
-      actions.appendChild(editBtn);
-      actions.appendChild(del);
-      actions.appendChild(pin);
-      actions.appendChild(moreBtn);
-
-      const snippet = document.createElement("div");
-      snippet.className = "snippet";
-      snippet.textContent = stripHtml(n.html) || s.emptyNote;
-
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = s.editedAgo + relativeTime(n.updatedAt);
-
-      const body = document.createElement("div");
-      body.className = "note-item-body";
-      body.appendChild(row);
-      body.appendChild(snippet);
-      body.appendChild(meta);
-
-      item.appendChild(body);
-      if (!readOnly) {
-        item.classList.add("with-actions");
-        item.appendChild(actions);
-      }
-
-      item.addEventListener("click", () => {
-        if (itemPick && !readOnly) {
-          void linkItemsTo(n.id);
-          return;
-        }
-        if (readOnly) playerActiveId = n.id;
-        else activeId = n.id;
-        renderList();
-        renderEditor();
-        closeDropdown();
-      });
-
-      noteListEl.appendChild(item);
+    // Pin: in the grid, always shown on a pinned note, on hover for the rest.
+    const pin = document.createElement("button");
+    pin.className = "row-btn pin-btn" + (n.pinned ? " pinned" : "");
+    pin.title = n.pinned ? s.unpinTitle : s.pinTitle;
+    pin.setAttribute("aria-label", pin.title + ": " + (n.title || s.untitled));
+    pin.setAttribute("aria-pressed", String(!!n.pinned));
+    pin.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.8 14.2 6.5l-2 .6-2.6 2.6.3 3.3-1.4 1.4-2.7-2.7L2.3 15 1 13.7l3.5-3.5-2.7-2.7 1.4-1.4 3.3.3 2.6-2.6.4-2Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+    pin.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void togglePin(n.id);
     });
+
+    const moreBtn = document.createElement("button");
+    moreBtn.className = "row-btn more-btn";
+    moreBtn.title = s.moreActions;
+    moreBtn.setAttribute("aria-label", s.moreActions + ": " + (n.title || s.untitled));
+    moreBtn.setAttribute("aria-haspopup", "menu");
+    moreBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/></svg>';
+    moreBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openRowMenu(moreBtn, n);
+    });
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "row-btn edit-btn";
+    editBtn.title = s.renameTitle;
+    editBtn.setAttribute("aria-label", s.renameAria + (n.title || s.untitled));
+    editBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M11 2.5 13.5 5 5.8 12.7l-3 .6.6-3L11 2.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+    editBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      startRename(item, n);
+    });
+
+    const del = document.createElement("button");
+    del.className = "row-btn del-btn";
+    del.title = s.deleteTitle;
+    del.setAttribute("aria-label", s.deleteAria + (n.title || s.untitled));
+    del.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none">${TRASH_ICON_PATH}</svg>`;
+    del.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void deleteNote(n.id);
+    });
+
+    row.appendChild(title);
+
+    // A grid beside the whole item (not inline after the title) so the title keeps most of the
+    // row's width: rename and delete; pin, and "more" (duplicate, save as template, export) last.
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    actions.appendChild(editBtn);
+    actions.appendChild(del);
+    actions.appendChild(pin);
+    actions.appendChild(moreBtn);
+
+    const snippet = document.createElement("div");
+    snippet.className = "snippet";
+    snippet.textContent = stripHtml(n.html) || s.emptyNote;
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = s.editedAgo + relativeTime(n.updatedAt);
+
+    const body = document.createElement("div");
+    body.className = "note-item-body";
+    body.appendChild(row);
+    body.appendChild(snippet);
+    body.appendChild(meta);
+
+    item.appendChild(body);
+    if (!readOnly) {
+      item.classList.add("with-actions");
+      item.appendChild(actions);
+    }
+
+    item.addEventListener("click", () => {
+      if (itemPick && !readOnly) {
+        void linkItemsTo(n.id);
+        return;
+      }
+      if (readOnly) playerActiveId = n.id;
+      else activeId = n.id;
+      renderList();
+      renderEditor();
+      closeDropdown();
+    });
+
+    return item;
+  };
+  if (flat) {
+    sorted(list).forEach((n) => noteListEl.appendChild(noteItem(n)));
+    return;
+  }
+  renderFolderLevel(null, noteListEl, 0, { list, sorted, noteItem, search });
+}
+
+// ---------- folders (see Folder in notes.ts) ----------
+// A note or folder pointing at a folder that's gone (deleted on another device, say) sits at the
+// root. So does a folder whose parents loop back to it (only possible through bad data).
+// While the list renders, the tree is read over and over: an index built once for that render
+// answers instead of scanning the folders each time (see renderList).
+interface FolderIndex {
+  byId: Map<string, Folder>;
+  parent: Map<string, string | null>;
+  children: Map<string | null, Folder[]>;
+  subtree: Map<string, Set<string>>;
+}
+let folderIndex: FolderIndex | null = null;
+function buildFolderIndex(): FolderIndex {
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const parent = new Map<string, string | null>();
+  const children = new Map<string | null, Folder[]>();
+  folders.forEach((f) => {
+    const p = folderParentId(f);
+    parent.set(f.id, p);
+    if (!children.has(p)) children.set(p, []);
+    children.get(p)!.push(f);
+  });
+  children.forEach((list) => list.sort(byFolderName));
+  return { byId, parent, children, subtree: new Map() };
+}
+function byFolderName(a: Folder, b: Folder): number {
+  return a.name.toLocaleLowerCase(language).localeCompare(b.name.toLocaleLowerCase(language), language);
+}
+function folderById(id: string | undefined): Folder | undefined {
+  if (!id) return undefined;
+  return folderIndex ? folderIndex.byId.get(id) : folders.find((f) => f.id === id);
+}
+function noteFolderId(n: Note): string | null {
+  return folderById(n.folderId) ? n.folderId! : null;
+}
+function folderParentId(f: Folder): string | null {
+  if (folderIndex) return folderIndex.parent.get(f.id) ?? null;
+  let p = folderById(f.parentId);
+  if (!p) return null;
+  const seen = new Set([f.id]);
+  for (let up: Folder | undefined = p; up; up = folderById(up.parentId)) {
+    if (seen.has(up.id)) return null;
+    seen.add(up.id);
+  }
+  return p.id;
+}
+function childFolders(parentId: string | null): Folder[] {
+  if (folderIndex) return folderIndex.children.get(parentId) ?? [];
+  return folders.filter((f) => folderParentId(f) === parentId).sort(byFolderName);
+}
+// A folder and every folder inside it, at any depth.
+function folderSubtree(id: string): Set<string> {
+  if (folderIndex) {
+    let ids = folderIndex.subtree.get(id);
+    if (!ids) {
+      const set = new Set([id]);
+      childFolders(id).forEach((c) => folderSubtree(c.id).forEach((x) => set.add(x)));
+      folderIndex.subtree.set(id, set);
+      ids = set;
+    }
+    return ids;
+  }
+  const ids = new Set([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    folders.forEach((f) => {
+      const p = folderParentId(f);
+      if (p && ids.has(p) && !ids.has(f.id)) { ids.add(f.id); grew = true; }
+    });
+  }
+  return ids;
+}
+// Every note inside a folder, its subfolders' included.
+function notesInFolder(id: string, list: Note[]): Note[] {
+  const ids = folderSubtree(id);
+  return list.filter((n) => { const fid = noteFolderId(n); return !!fid && ids.has(fid); });
+}
+// 1 for a folder at the root, 2 for one inside it, and so on.
+function folderDepth(f: Folder): number {
+  let depth = 1;
+  for (let p = folderParentId(f); p; p = folderParentId(folderById(p)!)) depth++;
+  return depth;
+}
+// How many levels a folder takes with what's inside it (1: no subfolders).
+function folderHeight(id: string): number {
+  return 1 + Math.max(0, ...childFolders(id).map((c) => folderHeight(c.id)));
+}
+// One level of the tree: its folders first (by name, each followed by its contents unless folded),
+// then its notes in the list's order.
+// While searching: the folders to show (those with a matching note, and their parents), and those
+// whose whole contents show (a folder whose name matches, and everything inside it).
+interface FolderSearch {
+  show: Set<string>;
+  whole: Set<string>;
+}
+function folderSearch(term: string, matches: Note[]): FolderSearch {
+  const q = term.toLowerCase();
+  const whole = new Set<string>();
+  folders.filter((f) => f.name.toLowerCase().includes(q)).forEach((f) => folderSubtree(f.id).forEach((id) => whole.add(id)));
+  const show = new Set<string>();
+  const withParents = (id: string | null) => {
+    for (let f = folderById(id ?? undefined); f && !show.has(f.id); f = folderById(folderParentId(f) ?? undefined)) show.add(f.id);
+  };
+  matches.forEach((n) => withParents(noteFolderId(n)));
+  whole.forEach(withParents);
+  return { show, whole };
+}
+interface TreeRender {
+  list: Note[];
+  sorted: (ns: Note[]) => Note[];
+  noteItem: (n: Note) => HTMLElement;
+  search: FolderSearch | null;
+}
+function renderFolderLevel(parentId: string | null, container: HTMLElement, depth: number, tree: TreeRender) {
+  const { search } = tree;
+  // Inside a folder whose name matched the search, every note shows, not only the matching ones.
+  const listFor = (folderId: string | null) => (search && folderId && search.whole.has(folderId) ? notes : tree.list);
+  childFolders(parentId).forEach((f) => {
+    if (search && !search.show.has(f.id)) return;
+    // Search results show open, whatever the folders' own state.
+    const folded = !search && foldedFolders.has(f.id);
+    container.appendChild(folderRow(f, depth + 1, folded, notesInFolder(f.id, listFor(f.id)).length));
+    if (folded) return;
+    const children = document.createElement("div");
+    children.className = "folder-children";
+    children.setAttribute("role", "group");
+    renderFolderLevel(f.id, children, depth + 1, tree);
+    if (children.childElementCount) container.appendChild(children);
+  });
+  tree.sorted(listFor(parentId).filter((n) => noteFolderId(n) === parentId)).forEach((n) => container.appendChild(tree.noteItem(n)));
+}
+function folderRow(f: Folder, depth: number, folded: boolean, count: number): HTMLElement {
+  const s = strings();
+  const row = document.createElement("div");
+  row.className = "folder-item";
+  row.dataset.folderId = f.id;
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-expanded", String(!folded));
+  row.innerHTML =
+    '<svg class="folder-chevron" width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+    '<svg class="folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 4.2c0-.6.5-1.1 1.1-1.1h3.3l1.5 1.6h5.4c.6 0 1.1.5 1.1 1.1v6.5c0 .6-.5 1.1-1.1 1.1H2.9c-.6 0-1.1-.5-1.1-1.1V4.2Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/></svg>';
+  const name = document.createElement("span");
+  name.className = "title";
+  name.textContent = f.name || s.newFolder;
+  const countEl = document.createElement("span");
+  countEl.className = "folder-count";
+  countEl.textContent = String(count);
+  countEl.title = s.folderNotes(count);
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "row-btn more-btn";
+  more.title = s.folderActions;
+  more.setAttribute("aria-label", s.folderActions + ": " + (f.name || s.newFolder));
+  more.setAttribute("aria-haspopup", "menu");
+  more.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/></svg>';
+  more.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const entries: MenuEntry[] = [[s.newNoteHere, () => void createNote(undefined, f.id)]];
+    if (depth < FOLDER_MAX_DEPTH) entries.push([s.newSubfolder, () => void createFolder(f.id)]);
+    entries.push([s.renameFolder, () => startFolderRename(row, f)]);
+    entries.push([s.moveTo, () => openMoveMenu(more, { folder: f })]);
+    entries.push([s.deleteFolder, () => void deleteFolder(f)]);
+    showMenu(more, entries);
+  });
+  row.append(name, countEl, more);
+  makeDraggable(row, () => ({ folder: f }));
+  const toggle = () => {
+    // Search results always show open (see renderFolderLevel): folding there would do nothing.
+    if (searchTerm) return;
+    if (foldedFolders.has(f.id)) foldedFolders.delete(f.id);
+    else foldedFolders.add(f.id);
+    saveFolded();
+    renderList();
+    (noteListEl.querySelector(`.folder-item[data-folder-id="${CSS.escape(f.id)}"]`) as HTMLElement | null)?.focus();
+  };
+  row.addEventListener("click", toggle);
+  row.addEventListener("keydown", (ev) => {
+    if (ev.target !== row) return;
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); }
+    else if (ev.key === "ArrowRight" && folded) { ev.preventDefault(); toggle(); }
+    else if (ev.key === "ArrowLeft" && !folded) { ev.preventDefault(); toggle(); }
+  });
+  return row;
+}
+function newFolderId(): string {
+  return "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+// Which folders are folded is this device's view only (see notes.ts).
+function saveFolded() {
+  void setFoldedFolders(Array.from(foldedFolders)).catch((err) => console.error("Notes: failed to save folded folders", err));
+}
+// Opens a folder and the ones around it, so what's inside shows.
+function unfoldFolder(id: string | null) {
+  let changed = false;
+  for (let f = folderById(id ?? undefined); f; f = folderById(folderParentId(f) ?? undefined)) {
+    if (foldedFolders.delete(f.id)) changed = true;
+  }
+  if (changed) saveFolded();
+}
+// Deleting a folder takes everything in it, after a warning: its notes go to the trash (back at the
+// root when restored, since the folder's gone), its subfolders go with it.
+async function deleteFolder(folder: Folder) {
+  const s = strings();
+  const ids = folderSubtree(folder.id);
+  const inside = notesInFolder(folder.id, notes);
+  if (!window.confirm(s.deleteFolderConfirm(folder.name || s.newFolder, inside.length, ids.size - 1))) return;
+  const gone = new Set(inside.map((n) => n.id));
+  // Out of the folder for good: restored, they come back at the root, here and on other devices.
+  const now = Date.now();
+  inside.forEach((n) => {
+    delete n.folderId;
+    n.folderAt = now;
+    moveToTrash(n);
+  });
+  notes = notes.filter((n) => !gone.has(n.id));
+  folders = folders.filter((f) => !ids.has(f.id));
+  // Remembered until the cloud is known to have dropped them too (see folderSync.ts): deleted while
+  // signed out, they'd otherwise come back from the cloud on the next sign-in.
+  ids.forEach((id) => erasedFolders.add(id));
+  saveErasedFolders();
+  ids.forEach((id) => void deleteFolderFromCloud(id));
+  if ([...ids].some((id) => foldedFolders.delete(id))) saveFolded();
+  const activeGone = !!activeId && gone.has(activeId);
+  if (activeGone) activeId = notes.length ? notes[0].id : null;
+  renderList();
+  if (activeGone) renderEditor();
+  await persist();
+}
+async function createFolder(parentId: string | null) {
+  const s = strings();
+  const folder: Folder = {
+    id: newFolderId(),
+    name: s.newFolder,
+    ...(parentId ? { parentId } : {}),
+    updatedAt: Date.now(),
+  };
+  folders.push(folder);
+  void pushFolder(folder);
+  unfoldFolder(parentId);
+  renderList();
+  const row = noteListEl.querySelector(`.folder-item[data-folder-id="${CSS.escape(folder.id)}"]`) as HTMLElement | null;
+  if (row) {
+    row.scrollIntoView({ block: "nearest" });
+    startFolderRename(row, folder);
+  }
+  await persist();
+}
+// ---------- moving notes and folders ----------
+// From a note's or folder's "Move to…", or by dragging it onto a folder (into it), onto a note
+// (beside it, in its folder) or onto the list's empty space (the root). A folder can't go inside
+// itself, nor anywhere it would end up deeper than FOLDER_MAX_DEPTH with what's inside it.
+type Movable = { note: Note } | { folder: Folder };
+function canMoveTo(what: Movable, target: string | null): boolean {
+  if ("note" in what) return true;
+  if (target === null) return true;
+  if (folderSubtree(what.folder.id).has(target)) return false;
+  return folderDepth(folderById(target)!) + folderHeight(what.folder.id) <= FOLDER_MAX_DEPTH;
+}
+function currentPlace(what: Movable): string | null {
+  return "note" in what ? noteFolderId(what.note) : folderParentId(what.folder);
+}
+// The note or folder as it is now: a menu or drag may hold an object the cloud has since replaced.
+function freshMovable(what: Movable): Movable | null {
+  if ("note" in what) {
+    const n = notes.find((x) => x.id === what.note.id);
+    return n ? { note: n } : null;
+  }
+  const f = folderById(what.folder.id);
+  return f ? { folder: f } : null;
+}
+async function moveTo(held: Movable, target: string | null) {
+  const what = freshMovable(held);
+  if (!what || (target !== null && !folderById(target))) return;
+  if (!canMoveTo(what, target) || currentPlace(what) === target) return;
+  if ("note" in what) {
+    // Not an edit: updatedAt stays (see folderAt).
+    const n = what.note;
+    if (target) n.folderId = target;
+    else delete n.folderId;
+    n.folderAt = Date.now();
+    markNoteDirty(n.id);
+  } else {
+    const f = what.folder;
+    if (target) f.parentId = target;
+    else delete f.parentId;
+    f.updatedAt = Date.now();
+    void pushFolder(f);
+  }
+  unfoldFolder(target);
+  renderList();
+  await persist();
+}
+function openMoveMenu(anchor: HTMLElement, what: Movable) {
+  const s = strings();
+  const here = currentPlace(what);
+  const entries: MenuEntry[] = [[s.noFolder, () => void moveTo(what, null), { current: here === null }]];
+  const add = (parentId: string | null, indent: number) =>
+    childFolders(parentId).forEach((f) => {
+      // A folder's own branch isn't offered at all; a folder too deep for this one is left out.
+      if ("folder" in what && f.id === what.folder.id) return;
+      if (canMoveTo(what, f.id)) entries.push([f.name || s.newFolder, () => void moveTo(what, f.id), { indent, current: here === f.id }]);
+      add(f.id, indent + 1);
+    });
+  add(null, 1);
+  // The anchor may have been re-rendered away by the time this opens.
+  showMenu(anchor.isConnected ? anchor : noteListEl, entries);
+}
+// Dragging: what's being dragged (an own data type, so dropping it into the note's text does nothing).
+const MOVE_TYPE = "application/x-gm-notes-move";
+let dragging: Movable | null = null;
+function makeDraggable(el: HTMLElement, what: () => Movable | null) {
+  el.draggable = true;
+  el.addEventListener("dragstart", (ev) => {
+    const w = what();
+    if (!w || !ev.dataTransfer) return;
+    dragging = w;
+    ev.dataTransfer.setData(MOVE_TYPE, "");
+    ev.dataTransfer.effectAllowed = "move";
+    el.classList.add("dragging");
+    closeRowMenu();
+    // Room at the list's foot to drop on for the root, even when the list is full. Not right away:
+    // changing the layout during dragstart itself can cancel the drag.
+    setTimeout(() => { if (dragging) noteListEl.classList.add("drag-active"); });
+  });
+  el.addEventListener("dragend", () => {
+    dragging = null;
+    el.classList.remove("dragging");
+    noteListEl.classList.remove("drag-active");
+    clearDropTarget();
+  });
+}
+// Where a drop at this point would put what's dragged: a folder row → into it; a note → its folder;
+// anywhere else in the list → the root. Undefined: not a drop spot (outside the list).
+function dropTargetAt(target: EventTarget | null): string | null | undefined {
+  const el = target instanceof Element ? target : null;
+  if (!el || !noteListEl.contains(el)) return undefined;
+  const folderRowEl = el.closest(".folder-item") as HTMLElement | null;
+  if (folderRowEl) return folderRowEl.dataset.folderId || null;
+  const noteEl = el.closest(".note-item") as HTMLElement | null;
+  if (noteEl) {
+    const n = notes.find((x) => x.id === noteEl.dataset.id);
+    return n ? noteFolderId(n) : null;
+  }
+  // Inside a folder's contents but not on a row: that folder.
+  const group = el.closest(".folder-children") as HTMLElement | null;
+  const owner = group?.previousElementSibling as HTMLElement | null;
+  return owner?.dataset.folderId || null;
+}
+// A band where what's dragged will show up once dropped. The list orders itself (folders by name,
+// notes in the list's order), so that's worked out from the order, not from the pointer.
+const dropLine = document.createElement("div");
+dropLine.className = "drop-line";
+dropLine.setAttribute("aria-hidden", "true");
+// What the band shows now: dragover repeats every ~50 ms while the pointer rests, for the same spot.
+let dropShown: { what: Movable; target: string | null } | null = null;
+function clearDropTarget() {
+  dropShown = null;
+  noteListEl.classList.remove("drop-root");
+  noteListEl.querySelectorAll(".drop-into").forEach((el) => el.classList.remove("drop-into"));
+  dropLine.remove();
+}
+function showDropTarget(target: string | null) {
+  if (dropShown && dropShown.what === dragging && dropShown.target === target && dropLine.isConnected) return;
+  clearDropTarget();
+  const row = target === null ? null : (noteListEl.querySelector(`.folder-item[data-folder-id="${CSS.escape(target)}"]`) as HTMLElement | null);
+  if (target === null) noteListEl.classList.add("drop-root");
+  else row?.classList.add("drop-into");
+  if (!dragging || (target !== null && !row)) return;
+  // The level's elements: the root list, or the folder's contents (absent while folded or empty).
+  const group = target === null ? noteListEl : row!.nextElementSibling?.classList.contains("folder-children") ? (row!.nextElementSibling as HTMLElement) : null;
+  let before: Element | null = null; // the element it will sit just before (null: at the level's end)
+  if (group) {
+    const what = dragging;
+    const folderEl = (f: Folder) => group.querySelector(`:scope > .folder-item[data-folder-id="${CSS.escape(f.id)}"]`);
+    const noteEl = (n: Note) => group.querySelector(`:scope > .note-item[data-id="${CSS.escape(n.id)}"]`);
+    const levelFolders = childFolders(target);
+    const firstNote = (group.querySelector(":scope > .note-item") as Element | null);
+    if ("folder" in what) {
+      const others = levelFolders.filter((f) => f.id !== what.folder.id);
+      const order = [...others, what.folder].sort((a, b) => a.name.toLocaleLowerCase(language).localeCompare(b.name.toLocaleLowerCase(language), language));
+      const next = order[order.indexOf(what.folder) + 1];
+      before = next ? folderEl(next) : firstNote;
+    } else {
+      const others = notes.filter((n) => n.id !== what.note.id && noteFolderId(n) === target);
+      const order = sortNotes([...others, what.note], false);
+      const next = order[order.indexOf(what.note) + 1];
+      before = next ? noteEl(next) : null;
+    }
+  }
+  const list = noteListEl.getBoundingClientRect();
+  const top0 = list.top - noteListEl.scrollTop;
+  let y: number;
+  let left: number;
+  if (!group) {
+    // Into a folded or empty folder: right under its row, a step in.
+    const r = row!.getBoundingClientRect();
+    y = r.bottom + 1;
+    left = r.left + 16;
+  } else {
+    const anchor = before ?? (Array.from(group.children).filter((c) => c !== dropLine).pop() as Element | undefined);
+    const g = group.getBoundingClientRect();
+    left = g.left + 5;
+    if (!anchor) y = g.top + (group === noteListEl ? 5 : 0);
+    else {
+      const r = anchor.getBoundingClientRect();
+      y = before ? r.top - 1 : r.bottom + 1;
+    }
+  }
+  dropLine.style.top = `${y - top0 - 1}px`;
+  dropLine.style.left = `${left - list.left}px`;
+  dropLine.style.width = `${Math.max(20, list.right - 5 - left)}px`;
+  noteListEl.appendChild(dropLine);
+  dropShown = { what: dragging, target };
+}
+noteListEl.addEventListener("dragover", (ev) => {
+  if (!dragging) return;
+  const target = dropTargetAt(ev.target);
+  if (target === undefined || !canMoveTo(dragging, target) || currentPlace(dragging) === target) {
+    clearDropTarget();
+    return;
+  }
+  ev.preventDefault();
+  if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+  showDropTarget(target);
+});
+// Only when the pointer really leaves the list: Chrome often gives dragleave no relatedTarget, even
+// between two rows, which made the band flicker.
+noteListEl.addEventListener("dragleave", (ev) => {
+  const r = noteListEl.getBoundingClientRect();
+  if (ev.clientX <= r.left || ev.clientX >= r.right || ev.clientY <= r.top || ev.clientY >= r.bottom) clearDropTarget();
+});
+noteListEl.addEventListener("drop", (ev) => {
+  if (!dragging) return;
+  ev.preventDefault();
+  const what = dragging;
+  const target = dropTargetAt(ev.target);
+  dragging = null;
+  noteListEl.classList.remove("drag-active");
+  clearDropTarget();
+  if (target !== undefined) void moveTo(what, target);
+});
+
+function startFolderRename(row: HTMLElement, folder: Folder) {
+  row.draggable = false;
+  const name = row.querySelector(".title") as HTMLElement;
+  const input = document.createElement("input");
+  input.className = "rename-input";
+  input.value = folder.name;
+  name.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  function commit() {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    // As it is now (the cloud may have replaced it while the name was being typed).
+    const current = folderById(folder.id);
+    if (v && current && v !== current.name) {
+      current.name = v;
+      current.updatedAt = Date.now();
+      void pushFolder(current);
+      void persist();
+    }
+    renderList();
+  }
+  input.addEventListener("keydown", (ev) => {
+    ev.stopPropagation();
+    if (ev.key === "Enter") { ev.preventDefault(); commit(); }
+    if (ev.key === "Escape") { done = true; renderList(); }
+  });
+  input.addEventListener("blur", commit);
+  input.addEventListener("click", (ev) => ev.stopPropagation());
 }
 
 function startRename(itemEl: HTMLElement, note: Note) {
+  // A draggable row would drag instead of selecting text in the input.
+  itemEl.draggable = false;
   const titleSpan = itemEl.querySelector(".title") as HTMLElement;
   const input = document.createElement("input");
   input.className = "rename-input";
@@ -550,18 +1064,31 @@ function closeRowMenu() {
 }
 function openRowMenu(anchor: HTMLElement, n: Note) {
   const s = strings();
-  const entries: [string, () => void][] = [
+  const entries: MenuEntry[] = [
     [s.duplicateNote, () => void duplicateNote(n)],
     [s.saveAsTemplateTitle, () => void saveAsTemplate(n)],
     [s.exportTitle, () => openExportFormatModal(n)],
   ];
+  if (folders.length) entries.unshift([s.moveTo, () => openMoveMenu(anchor, { note: n })]);
   if (n.editable && n.playerBase) entries.push([s.undoPlayerEdits, () => void undoPlayerEdits(n.id)]);
+  showMenu(anchor, entries);
+}
+// The list's small menu (a note's or a folder's actions), under its button.
+// An entry can be indented (the folder tree in "Move to…") or the current choice (shown, not picked).
+type MenuEntry = [string, () => void, { indent?: number; current?: boolean }?];
+function showMenu(anchor: HTMLElement, entries: MenuEntry[]) {
   rowMenu.innerHTML = "";
-  entries.forEach(([label, run]) => {
+  entries.forEach(([label, run, opts]) => {
     const b = document.createElement("button");
     b.type = "button";
     b.setAttribute("role", "menuitem");
     b.textContent = label;
+    if (opts?.indent) b.style.paddingLeft = `${9 + opts.indent * 14}px`;
+    if (opts?.current) {
+      b.disabled = true;
+      b.classList.add("current");
+      b.setAttribute("aria-current", "true");
+    }
     b.addEventListener("click", (ev) => {
       ev.stopPropagation();
       closeRowMenu();
@@ -600,6 +1127,7 @@ async function duplicateNote(n: Note) {
     html: n.html,
     updatedAt: Date.now(),
     secretModel: n.secretModel ?? SECRET_MODEL,
+    ...(noteFolderId(n) ? { folderId: n.folderId } : {}),
   };
   notes.unshift(copy);
   activeId = copy.id;
@@ -617,7 +1145,11 @@ sortBtn.type = "button";
 sortBtn.className = "sort-btn";
 const trashLinkEl = document.getElementById("trashLink") as HTMLElement;
 trashLinkEl.replaceWith(listFooter);
-listFooter.append(trashLinkEl, sortBtn);
+const newFolderBtn = document.createElement("button");
+newFolderBtn.type = "button";
+newFolderBtn.className = "sort-btn new-folder-btn";
+newFolderBtn.addEventListener("click", () => void createFolder(null));
+listFooter.append(trashLinkEl, newFolderBtn, sortBtn);
 sortBtn.addEventListener("click", () => {
   noteSort = noteSort === "recent" ? "alpha" : "recent";
   void setNoteSort(noteSort);
@@ -628,6 +1160,9 @@ function updateSortButton() {
   sortBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4.5 2.5v11M2 11l2.5 2.5L7 11M9.5 4h4.5M9.5 8h3.5M9.5 12h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   sortBtn.append(document.createTextNode(noteSort === "alpha" ? s.sortAlpha : s.sortRecent));
   sortBtn.title = s.sortTitle;
+  newFolderBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M1.8 4.2c0-.6.5-1.1 1.1-1.1h3.3l1.5 1.6h5.4c.6 0 1.1.5 1.1 1.1v6.5c0 .6-.5 1.1-1.1 1.1H2.9c-.6 0-1.1-.5-1.1-1.1V4.2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 7.3v3.6M6.2 9.1h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+  newFolderBtn.append(document.createTextNode(s.newFolder));
+  newFolderBtn.title = s.newFolderTitle;
   listFooter.hidden = isPlayerView() || trashView;
 }
 
@@ -881,6 +1416,12 @@ async function restoreFromTrash(id: string) {
   trash = trash.filter((t) => t.id !== id);
   delete note.deletedAt;
   note.updatedAt = Date.now();
+  // Back in its folder if that's still there; at the root otherwise.
+  if (!folderById(note.folderId)) {
+    // A move to the root, newer than any other device's idea of where it is.
+    if (note.folderId) note.folderAt = Date.now();
+    delete note.folderId;
+  } else unfoldFolder(note.folderId!);
   notes.unshift(note);
   markNoteDirty(id);
   refreshLinkersOf(id);
@@ -1267,7 +1808,7 @@ document.getElementById("publishConfirmBtn")!.addEventListener("click", () => {
   if (pending) void setNoteMode(pending.id, pending.mode);
 });
 
-async function createNote(template?: Template) {
+async function createNote(template?: Template, folderId?: string) {
   // A built-in's text is copied in the current language and stays that way in the note.
   const source = template ? resolveTemplate(template, language) : null;
   const note: Note = {
@@ -1276,7 +1817,9 @@ async function createNote(template?: Template) {
     html: source ? expandSecretMarks(source.html) : "",
     updatedAt: Date.now(),
     secretModel: SECRET_MODEL,
+    ...(folderId ? { folderId } : {}),
   };
+  if (folderId) unfoldFolder(folderId);
   notes.unshift(note);
   activeId = note.id;
   markNoteDirty(note.id);
@@ -1509,6 +2052,8 @@ function exportNote(note: Note, format: ExportFormat) {
 function exportAllNotes(format: ExportFormat) {
   return exportAll(notes, templates, format, {
     untitled: strings().untitled,
+    folders: folders.map((f) => ({ id: f.id, name: f.name || strings().newFolder, parentId: folderParentId(f) })),
+    noteFolder: noteFolderId,
     templatesFolder: strings().templatesFolder,
     templateTitle: (t) => resolveTemplate(t, language).title,
   });
@@ -1536,11 +2081,15 @@ function chooseExportFormat(format: ExportFormat) {
 async function importNotesFromFiles(files: FileList) {
   const imported: Note[] = [];
   const importedTemplates: Template[] = [];
+  const notePaths = new Map<string, string[]>();
+  const folderPaths: string[][] = [];
   for (const file of Array.from(files)) {
     try {
       const content = await contentFromImportFile(file, strings().untitled);
       imported.push(...content.notes);
       importedTemplates.push(...content.templates);
+      content.notePaths.forEach((path, id) => notePaths.set(id, path));
+      folderPaths.push(...content.folderPaths);
     } catch (err) {
       console.error("Notes: failed to read import file", file.name, err);
     }
@@ -1562,7 +2111,7 @@ async function importNotesFromFiles(files: FileList) {
     newTemplates.forEach((t) => void pushTemplate(t));
     renderTemplateList();
   }
-  if (!imported.length) {
+  if (!imported.length && !folderPaths.length) {
     window.alert(newTemplates.length ? strings().importSuccess(0, newTemplates.length) : strings().importNothingNew);
     return;
   }
@@ -1576,12 +2125,47 @@ async function importNotesFromFiles(files: FileList) {
   // All-or-nothing: rolling the in-memory array back if persist() fails keeps it from silently
   // showing notes that never actually made it to storage.
   const before = notes;
+  const foldersBefore = folders;
+  // The zip's folders, by name: into the list's folder of the same name in the same place, or a new
+  // one. Past the deepest level allowed, what's further in lands in the deepest one.
+  const created: Folder[] = [];
+  const folderAtPath = (path: string[]): string | null => {
+    let parent: string | null = null;
+    for (const name of path.slice(0, FOLDER_MAX_DEPTH)) {
+      const clean = name.trim() || strings().newFolder;
+      const existing: Folder | undefined = childFolders(parent).find((f) => f.name.trim().toLowerCase() === clean.toLowerCase());
+      if (existing) {
+        parent = existing.id;
+        continue;
+      }
+      const folder: Folder = {
+        id: newFolderId(),
+        name: clean,
+        ...(parent ? { parentId: parent } : {}),
+        updatedAt: Date.now(),
+      };
+      folders = [...folders, folder];
+      created.push(folder);
+      parent = folder.id;
+    }
+    return parent;
+  };
+  if (foldersLoaded) {
+    folderPaths.forEach(folderAtPath);
+    imported.forEach((n) => {
+      const path = notePaths.get(n.id);
+      const at = path ? folderAtPath(path) : null;
+      if (at) n.folderId = at;
+    });
+  }
   notes = [...imported, ...notes];
   const ok = await persist();
   if (!ok) {
     notes = before;
+    folders = foldersBefore;
     return;
   }
+  created.forEach((f) => void pushFolder(f));
   renderList();
   renderEditor();
   updateStorageMeter();
@@ -1642,6 +2226,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     toolbarStrings: () => strings().toolbar,
     blockAt,
     placeCaretAtStart,
+    caretRangeAt,
     pushHistory,
     noteTyping,
     ensureBlockWrapper,
@@ -4098,6 +4683,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       if (edge && edge.inside) { ev.preventDefault(); caretAfterPill(edge.pill); updateToolbarState(); }
       else if (at && at.kind === "before") { ev.preventDefault(); caretAtPillStart(at.pill); updateToolbarState(); }
       else if (starting) { ev.preventDefault(); caretAtPillStart(starting); updateToolbarState(); }
+      else tables.handleArrowKeys(ev);
       return;
     }
     if (ev.key === "ArrowLeft" && plainArrow) {
@@ -4106,8 +4692,11 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
       if (at && at.kind === "after") { ev.preventDefault(); caretAtPillEnd(at.pill); updateToolbarState(); }
       else if (at && at.kind === "start") { ev.preventDefault(); caretBeforePill(at.pill); updateToolbarState(); }
       else if (afterFirst) { ev.preventDefault(); caretAtPillStart(afterFirst); updateToolbarState(); }
+      else tables.handleArrowKeys(ev);
       return;
     }
+    // ↑ / ↓ in a table: to the cell above / below from a cell's first / last line (see tableEditor.ts).
+    if (tables.handleArrowKeys(ev)) return;
     if (tables.handleTab(ev)) return;
     if (tables.handleMoveKeys(ev)) return;
     if (ev.key !== "Tab") return;
@@ -4158,6 +4747,53 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
     if (range.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) range.setEnd(bounds.endContainer, bounds.endOffset);
     sel.removeAllRanges();
     sel.addRange(range);
+    updateToolbarState();
+  });
+  // Double-clicking empty space in the note (not on a line) opens a line there to write on. Below
+  // the last line it's a line outside every section. In a gap between two lines it's an ordinary
+  // line, in whatever section is there — so nothing after it moves — except that it leaves the
+  // sections the next line closes anyway (a heading ends its level and deeper): there it lands
+  // where that next line does, and never inside a folded section. Next to an empty line already
+  // there, the caret just goes to that one instead of stacking another.
+  surface.addEventListener("dblclick", (ev) => {
+    if (ev.target !== surface || !surface.isContentEditable) return;
+    const blocks = (Array.prototype.slice.call(surface.children) as HTMLElement[]).filter((b) => b.getClientRects().length);
+    const y = ev.clientY;
+    let next: HTMLElement | null = null;
+    let prev: HTMLElement | null = null;
+    for (const b of blocks) {
+      const r = b.getBoundingClientRect();
+      if (y >= r.top && y <= r.bottom) return; // beside a line, not between lines
+      if (r.top > y) { next = b; break; }
+      prev = b;
+    }
+    const isEmptyLine = (b: HTMLElement | null) =>
+      !!b && /^(P|DIV)$/.test(b.tagName) && !(b.textContent || "").replace(/​/g, "") && !b.querySelector("img, hr, input");
+    ev.preventDefault();
+    const reuse = next
+      ? isEmptyLine(prev) ? prev : isEmptyLine(next) ? next : null
+      : isEmptyLine(prev) && !prev!.hasAttribute("data-depth") ? prev : null;
+    if (reuse) {
+      placeCaretAtStart(reuse);
+      updateToolbarState();
+      return;
+    }
+    pushHistory();
+    const line = document.createElement("p");
+    line.innerHTML = "<br>";
+    // Below the last line: after everything, hidden lines of a folded last section included.
+    if (next) surface.insertBefore(line, next);
+    else surface.appendChild(line);
+    applyFolding();
+    if (line.hasAttribute("data-depth") || line.hasAttribute("data-folded")) {
+      const exit = !next ? 1 : headingLevel(next) || exitLevel(next);
+      if (exit) {
+        line.setAttribute("data-exit", String(exit));
+        applyFolding();
+      }
+    }
+    placeCaretAtStart(line);
+    surface.dispatchEvent(new Event("input"));
     updateToolbarState();
   });
 
@@ -4483,6 +5119,9 @@ function onDocPointerDown(ev: Event) {
   if (!noteSwitcher.contains(ev.target as Node) && !rowMenu.contains(ev.target as Node)) closeDropdown();
 }
 function onDocKeydown(ev: KeyboardEvent) {
+  // Escape in a note's or folder's rename only cancels it (the input's own handler): closing the
+  // list would also blur the input, which saves the half-typed name.
+  if ((ev.target as HTMLElement | null)?.classList?.contains("rename-input")) return;
   if (ev.key === "Escape") { closeDropdown(); (switcherTrigger as HTMLElement).focus(); }
 }
 switcherTrigger.addEventListener("click", () => {
@@ -4985,6 +5624,21 @@ function mergeCloudNotes(cloudNotes: Note[], removedIds: string[]) {
   cloudNotes.forEach((cloudNote) => {
     if (migrateSecretModel(cloudNote)) markNoteDirty(cloudNote.id);
     const local = notes.find((n) => n.id === cloudNote.id) || trash.find((t) => t.id === cloudNote.id);
+    // Moving between folders isn't an edit: whichever side moved it last decides its folder, apart
+    // from which side has the latest text.
+    const movedHere = !!local && (local.folderAt ?? 0) > (cloudNote.folderAt ?? 0);
+    const movedThere = !!local && (cloudNote.folderAt ?? 0) > (local.folderAt ?? 0);
+    const placeFrom = (from: Note, to: Note) => {
+      if (from.folderId) to.folderId = from.folderId;
+      else delete to.folderId;
+      if (typeof from.folderAt === "number") to.folderAt = from.folderAt;
+    };
+    if (local && movedHere) markNoteDirty(cloudNote.id);
+    if (local && movedHere && cloudNote.updatedAt > local.updatedAt) placeFrom(local, cloudNote);
+    if (local && movedThere && cloudNote.updatedAt <= local.updatedAt) {
+      placeFrom(cloudNote, local);
+      listChanged = true;
+    }
     if (!local || cloudNote.updatedAt > local.updatedAt) {
       if (local) take(cloudNote.id);
       if (typeof cloudNote.deletedAt === "number") trash.push(cloudNote);
@@ -5007,14 +5661,36 @@ function mergeCloudNotes(cloudNotes: Note[], removedIds: string[]) {
 
 let stopCloudWatch: (() => void) | null = null;
 let stopTemplateWatch: (() => void) | null = null;
+let stopFolderWatch: (() => void) | null = null;
 function applyCloudAuthState(user: User | null) {
   stopCloudWatch?.();
   stopCloudWatch = null;
+  stopFolderWatch?.();
+  stopFolderWatch = null;
   stopTemplateWatch?.();
   stopTemplateWatch = null;
   if (user && currentRoomIdForCloud) {
     // Public copies wait for the account's notes: until then this device may be missing some.
     stopCloudWatch = watchCloudNotes(currentRoomIdForCloud, mergeCloudNotes, reconcilePublicNotes);
+    // Only once the stored ones are read: before that, the local list would look empty.
+    if (foldersLoaded) {
+      stopFolderWatch = watchCloudFolders(
+        currentRoomIdForCloud,
+        () => folders,
+        (next) => {
+          folders = next;
+          void persist();
+          renderList();
+        },
+        {
+          ids: () => erasedFolders,
+          settled: (ids) => {
+            ids.forEach((id) => erasedFolders.delete(id));
+            saveErasedFolders();
+          },
+        }
+      );
+    }
   }
   followOwnShared();
   // A public note can be edited only signed in.
@@ -5051,6 +5727,14 @@ async function boot() {
   itemLinksEnabled = initialItemLinks;
   noteSort = initialSort;
   notes = initialNotes;
+  try {
+    folders = await getFolders();
+    foldersLoaded = true;
+    foldedFolders = new Set(await getFoldedFolders());
+    erasedFolders = new Set(await getErasedFolders());
+  } catch (err) {
+    console.error("Notes: failed to load the folders", err);
+  }
   try {
     trash = await getTrash();
     erased = new Set(await getErased());

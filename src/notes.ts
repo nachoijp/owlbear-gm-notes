@@ -21,7 +21,22 @@ export interface Note {
   secretModel?: number;
   /** Kept at the top of the notes list. */
   pinned?: boolean;
+  /** The folder it's in (see Folder). Absent, or a folder that no longer exists: the list's root. */
+  folderId?: string;
+  /** When it was last moved between folders. Moving isn't an edit (updatedAt stays), so this is what
+   * tells which device's folder is the latest (see mergeCloudNotes in main.ts). */
+  folderAt?: number;
 }
+
+/** A folder in the notes list, per room like the notes. Folders nest up to FOLDER_MAX_DEPTH levels. */
+export interface Folder {
+  id: string;
+  name: string;
+  /** The folder it's in. Absent (or one that no longer exists): the root. */
+  parentId?: string;
+  updatedAt: number;
+}
+export const FOLDER_MAX_DEPTH = 3;
 
 // Notes used to live in OBR.room.setMetadata(), which shares a single 16kB budget across EVERY
 // extension in the room — not just this one. A GM writing enough notes could leave other, unrelated
@@ -67,7 +82,46 @@ export function sanitizeNote(value: unknown): Note | undefined {
     ...(typeof value.deletedAt === "number" ? { deletedAt: value.deletedAt } : {}),
     ...(typeof value.secretModel === "number" ? { secretModel: value.secretModel } : {}),
     ...(value.pinned === true ? { pinned: true } : {}),
+    ...(typeof value.folderId === "string" && value.folderId ? { folderId: value.folderId } : {}),
+    ...(typeof value.folderAt === "number" ? { folderAt: value.folderAt } : {}),
   };
+}
+
+export function sanitizeFolder(value: unknown): Folder | undefined {
+  if (!isPlainObject(value) || typeof value.id !== "string" || !value.id || typeof value.name !== "string") return undefined;
+  return {
+    id: value.id,
+    name: value.name,
+    ...(typeof value.parentId === "string" && value.parentId && value.parentId !== value.id ? { parentId: value.parentId } : {}),
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
+  };
+}
+
+// The folders, stored apart from the notes under their own key (older versions simply don't see
+// them, and show every note at the root).
+export async function getFolders(): Promise<Folder[]> {
+  const stored = await store.getItem<unknown>(`folders:${OBR.room.id}`);
+  return Array.isArray(stored) ? stored.map(sanitizeFolder).filter((f): f is Folder => f !== undefined) : [];
+}
+export async function setFolders(folders: Folder[]): Promise<void> {
+  await store.setItem(`folders:${OBR.room.id}`, folders);
+}
+// Folders deleted here that the cloud may not have heard about yet (see folderSync.ts).
+export async function getErasedFolders(): Promise<string[]> {
+  const stored = await store.getItem<unknown>(`foldersErased:${OBR.room.id}`);
+  return Array.isArray(stored) ? stored.filter((x): x is string => typeof x === "string") : [];
+}
+export async function setErasedFolders(ids: string[]): Promise<void> {
+  await store.setItem(`foldersErased:${OBR.room.id}`, ids.slice(-ERASED_FOLDERS_CAP));
+}
+const ERASED_FOLDERS_CAP = 500;
+// Which folders are folded in the list: this device's view only, not synced.
+export async function getFoldedFolders(): Promise<string[]> {
+  const stored = await store.getItem<unknown>(`foldersFolded:${OBR.room.id}`);
+  return Array.isArray(stored) ? stored.filter((x): x is string => typeof x === "string") : [];
+}
+export async function setFoldedFolders(ids: string[]): Promise<void> {
+  await store.setItem(`foldersFolded:${OBR.room.id}`, ids);
 }
 
 function sanitizeNotes(value: unknown): Note[] {
@@ -167,6 +221,8 @@ export async function setErased(ids: string[]): Promise<void> {
 export async function clearAllNotes(): Promise<void> {
   const roomId = OBR.room.id;
   await store.removeItem(dbKeyForRoom(roomId));
+  await store.removeItem(`folders:${roomId}`);
+  await store.removeItem(`foldersFolded:${roomId}`);
 }
 
 function byteLength(value: unknown): number {

@@ -426,6 +426,8 @@ export async function flushCloudSync(): Promise<void> {
             ...(typeof note.deletedAt === "number" ? { deletedAt: note.deletedAt } : {}),
             ...(typeof note.secretModel === "number" ? { secretModel: note.secretModel } : {}),
             ...(note.pinned ? { pinned: true } : {}),
+            ...(note.folderId ? { folderId: note.folderId } : {}),
+            ...(typeof note.folderAt === "number" ? { folderAt: note.folderAt } : {}),
           }),
           note.public && sharedKey && sharedVersions.get(sharedKey + "/" + id) !== note.updatedAt
             ? writeSharedNote(sharedKey, note, user.uid)
@@ -477,7 +479,7 @@ export function watchCloudNotes(
         if (change.type === "removed") {
           removedIds.push(change.doc.id);
         } else {
-          const data = change.doc.data() as { title?: unknown; html?: unknown; updatedAt?: unknown; public?: unknown; editable?: unknown; playerBase?: unknown; deletedAt?: unknown; secretModel?: unknown; pinned?: unknown };
+          const data = change.doc.data() as { title?: unknown; html?: unknown; updatedAt?: unknown; public?: unknown; editable?: unknown; playerBase?: unknown; deletedAt?: unknown; secretModel?: unknown; pinned?: unknown; folderId?: unknown; folderAt?: unknown };
           const playerBase = sanitizePlayerBase(data.playerBase);
           notes.push({
             id: change.doc.id,
@@ -490,6 +492,8 @@ export function watchCloudNotes(
             ...(typeof data.deletedAt === "number" ? { deletedAt: data.deletedAt } : {}),
             ...(typeof data.secretModel === "number" ? { secretModel: data.secretModel } : {}),
             ...(data.pinned === true ? { pinned: true } : {}),
+            ...(typeof data.folderId === "string" && data.folderId ? { folderId: data.folderId } : {}),
+            ...(typeof data.folderAt === "number" ? { folderAt: data.folderAt } : {}),
           });
         }
       });

@@ -78,6 +78,17 @@ export interface Strings {
   moreActions: string;
   duplicateNote: string;
   copySuffix: string;
+  newFolder: string;
+  newFolderTitle: string;
+  newNoteHere: string;
+  newSubfolder: string;
+  renameFolder: string;
+  folderActions: string;
+  folderNotes: (n: number) => string;
+  moveTo: string;
+  noFolder: string;
+  deleteFolder: string;
+  deleteFolderConfirm: (name: string, notes: number, subfolders: number) => string;
   renameAria: string;
   deleteTitle: string;
   trashLink: (n: number) => string;
@@ -242,6 +253,21 @@ const STRINGS: Record<Language, Strings> = {
     sortTitle: "Cambiar el orden de la lista",
     moreActions: "Más acciones",
     duplicateNote: "Duplicar",
+    newFolder: "Nueva carpeta",
+    newFolderTitle: "Crear una carpeta para ordenar las notas",
+    newNoteHere: "Nueva nota aquí",
+    newSubfolder: "Nueva subcarpeta",
+    renameFolder: "Renombrar",
+    folderActions: "Acciones de la carpeta",
+    folderNotes: (n) => (n === 1 ? "1 nota" : `${n} notas`),
+    moveTo: "Mover a…",
+    noFolder: "Sin carpeta",
+    deleteFolder: "Borrar carpeta",
+    deleteFolderConfirm: (name, notes, subfolders) => {
+      const parts = [notes === 1 ? "1 nota" : notes ? `${notes} notas` : "", subfolders === 1 ? "1 subcarpeta" : subfolders ? `${subfolders} subcarpetas` : ""].filter(Boolean);
+      if (!parts.length) return `¿Borrar la carpeta «${name}»? Está vacía.`;
+      return `¿Borrar la carpeta «${name}» con todo lo que tiene (${parts.join(" y ")})?` + (notes ? " Las notas van a la papelera y podés restaurarlas durante 30 días." : "");
+    },
     copySuffix: " (copia)",
     renameAria: "Renombrar ",
     deleteTitle: "Mover a la papelera",
@@ -433,6 +459,21 @@ const STRINGS: Record<Language, Strings> = {
     sortTitle: "Change the list's order",
     moreActions: "More actions",
     duplicateNote: "Duplicate",
+    newFolder: "New folder",
+    newFolderTitle: "Create a folder to organize your notes",
+    newNoteHere: "New note here",
+    newSubfolder: "New subfolder",
+    renameFolder: "Rename",
+    folderActions: "Folder actions",
+    folderNotes: (n) => (n === 1 ? "1 note" : `${n} notes`),
+    moveTo: "Move to…",
+    noFolder: "No folder",
+    deleteFolder: "Delete folder",
+    deleteFolderConfirm: (name, notes, subfolders) => {
+      const parts = [notes === 1 ? "1 note" : notes ? `${notes} notes` : "", subfolders === 1 ? "1 subfolder" : subfolders ? `${subfolders} subfolders` : ""].filter(Boolean);
+      if (!parts.length) return `Delete the folder “${name}”? It's empty.`;
+      return `Delete the folder “${name}” and everything in it (${parts.join(" and ")})?` + (notes ? " The notes go to the trash, where you can restore them for 30 days." : "");
+    },
     copySuffix: " (copy)",
     renameAria: "Rename ",
     deleteTitle: "Move to trash",

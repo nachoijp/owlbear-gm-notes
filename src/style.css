@@ -43,6 +43,8 @@ body{
 }
 .panel *{ box-sizing:border-box; }
 .panel :focus-visible{ outline:2px solid var(--primary-main); outline-offset:-1px; border-radius:6px; }
+/* Selected text takes the accent color (translucent, so the text keeps its own color and contrast). */
+.panel ::selection{ background-color: color-mix(in srgb, var(--primary-main) 38%, transparent); }
 
 .note-list, .editor-scroll, .pill-swatches, .settings-modal-body, .editor-surface table, .link-picker-list{
   scrollbar-width: thin;
@@ -210,6 +212,54 @@ body{
 .list-footer{ flex:0 0 auto; display:flex; align-items:stretch; border-top:1px solid var(--divider); }
 .list-footer .trash-link{ flex:1 1 auto; border-top:0; }
 .list-footer .trash-link[hidden] + .sort-btn{ margin-left:auto; }
+/* Folders in the note list (see main.ts): a row that folds its contents, indented under it. */
+.folder-item{
+  display:flex; align-items:center; gap:5px; padding:4px 6px 4px 5px; border-radius:7px; cursor:pointer;
+  color:var(--text-primary); min-height:32px;
+}
+.folder-item:hover{ background:color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.folder-item .folder-chevron{ flex:0 0 auto; color:var(--text-secondary); transform:rotate(90deg); transition:transform .12s ease; }
+.folder-item[aria-expanded="false"] .folder-chevron{ transform:none; }
+.folder-item .folder-icon{ flex:0 0 auto; color:var(--primary-light); }
+.folder-item .title{
+  flex:1 1 auto; min-width:0; font-size:12.5px; font-weight:600;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.folder-item .rename-input{
+  flex:1 1 auto; min-width:0; font:inherit; font-size:12.5px; font-weight:600; color:var(--text-primary);
+  background:var(--bg-default); border:1px solid var(--primary-main); border-radius:5px; padding:1px 5px;
+}
+.folder-count{ flex:0 0 auto; font-family:var(--font-mono); font-size:10px; color:var(--text-disabled); font-variant-numeric:tabular-nums; }
+.folder-item .row-btn{
+  flex:0 0 auto; width:24px; height:24px; border-radius:6px; border:0; background:transparent;
+  color:var(--text-disabled); display:flex; align-items:center; justify-content:center; cursor:pointer;
+  opacity:0; transition:opacity .1s ease, background .1s ease, color .1s ease;
+}
+.folder-item:hover .row-btn, .folder-item:focus-within .row-btn, .folder-item:focus-visible .row-btn{ opacity:1; }
+.folder-children{
+  display:flex; flex-direction:column; gap:2px;
+  margin-left:11px; padding-left:5px; border-left:1px solid var(--divider);
+}
+.list-footer .trash-link[hidden] + .new-folder-btn{ margin-left:auto; }
+/* Moving notes and folders: what's dragged fades, and where it would land lights up. */
+.note-item.dragging, .folder-item.dragging{ opacity:.4; }
+.folder-item.drop-into{
+  background:color-mix(in srgb, var(--primary-main) 22%, transparent);
+  box-shadow:inset 0 0 0 1px var(--primary-main);
+}
+.note-list.drag-active{ padding-bottom:40px; }
+.note-list{ position:relative; }
+.drop-line{
+  position:absolute; height:2px; border-radius:2px; pointer-events:none; z-index:2;
+  background:var(--primary-main); box-shadow:0 0 0 1px color-mix(in srgb, var(--primary-main) 35%, transparent);
+}
+.drop-line::before{
+  content:""; position:absolute; left:-3px; top:-2px; width:6px; height:6px; border-radius:50%; background:var(--primary-main);
+}
+.note-list.drop-root{ box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--primary-main) 60%, transparent); border-radius:8px; }
+.row-menu{ max-height:min(320px, 70vh); overflow-y:auto; }
+.row-menu button.current{ cursor:default; color:var(--primary-light); font-weight:600; }
+.row-menu button.current:hover{ background:transparent; }
 .sort-btn{
   flex:0 0 auto; display:flex; align-items:center; gap:5px; padding:7px 12px; border:0; background:transparent;
   color:var(--text-secondary); font:inherit; font-size:11.5px; cursor:pointer;

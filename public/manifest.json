@@ -1,11 +1,11 @@
 {
   "name": "GM Notes",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "manifest_version": 3,
   "author": "Ignacio Pedraza",
   "homepage_url": "https://github.com/nachoijp/owlbear-gm-notes",
   "icon": "https://notes.ijpedraza.com/logo.svg",
-  "description": "Keep prep, secrets and stat blocks one click away — a GM journal with tables, folding sections, templates and player sharing.",
+  "description": "Keep prep, secrets and stat blocks one click away — a GM journal with folders, tables, folding sections, templates and player sharing.",
   "background_url": "/background.html",
   "action": {
     "title": "GM Notes",

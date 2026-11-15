@@ -1,7 +1,7 @@
 import type { User } from "firebase/auth";
 import { hasFirebaseConfig } from "./firebaseConfig";
 import { getPluginId } from "./pluginId";
-import type { Note } from "./notes";
+import type { Note, Folder } from "./notes";
 import type { Template } from "./templates";
 import type { SyncStatus, SharedCopy } from "./cloudSync";
 export type { SharedCopy } from "./cloudSync";
@@ -14,7 +14,7 @@ export type { SharedCopy } from "./cloudSync";
 // Everything that needs a signed-in user is a no-op until they've loaded: nobody can be signed in
 // before Firebase is there to say so.
 
-type Impl = typeof import("./cloudSync") & typeof import("./templateSync");
+type Impl = typeof import("./cloudSync") & typeof import("./templateSync") & typeof import("./folderSync");
 
 let impl: Impl | null = null;
 let loading: Promise<Impl> | null = null;
@@ -42,8 +42,8 @@ function rememberSignIn(user: User | null) {
 
 function load(): Promise<Impl> {
   if (!loading) {
-    loading = Promise.all([import("./cloudSync"), import("./templateSync")]).then(([sync, templateSync]) => {
-      const loaded: Impl = { ...sync, ...templateSync };
+    loading = Promise.all([import("./cloudSync"), import("./templateSync"), import("./folderSync")]).then(([sync, templateSync, folderSync]) => {
+      const loaded: Impl = { ...sync, ...templateSync, ...folderSync };
       if (context) loaded.initCloudSyncContext(...context);
       loaded.setSharedKey(sharedKey);
       statusListeners.forEach((cb) => loaded.onSyncStatusChange(cb));
@@ -180,4 +180,14 @@ export async function deleteTemplateFromCloud(templateId: string): Promise<void>
 }
 export function watchCloudTemplates(...args: Parameters<Impl["watchCloudTemplates"]>): () => void {
   return impl ? impl.watchCloudTemplates(...args) : () => {};
+}
+
+export async function pushFolder(folder: Folder): Promise<void> {
+  if (impl) await impl.pushFolder(folder);
+}
+export async function deleteFolderFromCloud(id: string): Promise<void> {
+  if (impl) await impl.deleteFolderFromCloud(id);
+}
+export function watchCloudFolders(...args: Parameters<Impl["watchCloudFolders"]>): () => void {
+  return impl ? impl.watchCloudFolders(...args) : () => {};
 }
