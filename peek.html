@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <title>GM Notes quick view</title>
+  </head>
+  <body>
+    <div class="panel peek" id="panel">
+      <div class="peek-head">
+        <span class="peek-title" id="peekTitle"></span>
+        <button type="button" class="peek-open-btn" id="peekOpenBtn">
+          <svg viewBox="0 0 16 16" fill="none"><path d="M9.5 2.5h4v4M13.5 2.5 8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="editor-scroll">
+        <div class="secret-layer" id="peekSecretLayer" aria-hidden="true"></div>
+        <div class="editor-surface read-only" id="peekBody"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/peek.ts"></script>
+  </body>
+</html>

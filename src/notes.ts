@@ -26,6 +26,8 @@ export interface Note {
   /** When it was last moved between folders. Moving isn't an edit (updatedAt stays), so this is what
    * tells which device's folder is the latest (see mergeCloudNotes in main.ts). */
   folderAt?: number;
+  /** Its linked map items show a badge that opens a quick view of it (see itemLinks.ts). */
+  mapIcon?: boolean;
 }
 
 /** A folder in the notes list, per room like the notes. Folders nest up to FOLDER_MAX_DEPTH levels. */
@@ -84,6 +86,7 @@ export function sanitizeNote(value: unknown): Note | undefined {
     ...(value.pinned === true ? { pinned: true } : {}),
     ...(typeof value.folderId === "string" && value.folderId ? { folderId: value.folderId } : {}),
     ...(typeof value.folderAt === "number" ? { folderAt: value.folderAt } : {}),
+    ...(value.mapIcon === true ? { mapIcon: true } : {}),
   };
 }
 

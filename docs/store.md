@@ -70,7 +70,9 @@ Right-click any item on the map (a token, a door, a marker…) and choose
 **Link note** to tie a note to it, then **Open note** from that same menu
 whenever you need it. The button at the end of a note's title lists its
 linked items and the notes that link to it. Players only ever see links to
-notes you've shared.
+notes you've shared, and they can open a shared note from its item on the
+map too. Turn on **Icon on the map** for a note and its items show a small
+icon: double-click it for a quick view of the note, right on the map.
 
 ![A link to another note, and the note picker open](https://raw.githubusercontent.com/nachoijp/owlbear-gm-notes/main/docs/screenshot-links.png)
 

@@ -93,6 +93,7 @@
               <div class="settings-section" id="cloudSyncSection" hidden>
                 <span class="settings-section-label" id="settingsCloudLabel">Cloud sync</span>
                 <p class="cleanup-hint" id="cloudSyncHint">Sign in with Google to sync your notes to your own account, so they follow you to another device. Only you can see them — signing in does not share anything with players or other GMs.</p>
+                <p class="share-signin-notice" id="shareSignInNotice" hidden></p>
                 <div class="backup-row" id="cloudSignedOutRow">
                   <button type="button" class="opt-btn" id="cloudSignInBtn">Sign in with Google</button>
                 </div>
@@ -227,9 +228,10 @@
       </div>
 
       <span class="panel-size-hint" id="sizeHint"></span>
-      <div class="resize-handle" id="resizeHandle" title="Resize panel">
-        <svg viewBox="0 0 12 12" fill="none"><path d="M10.5 1.5 1.5 10.5M10.5 5.5 5.5 10.5M10.5 9.5 9.5 10.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-      </div>
+    </div>
+    <!-- Outside the panel, on the page's (the popover's) own corner, over the margin around it. -->
+    <div class="resize-handle" id="resizeHandle" title="Resize panel">
+      <svg viewBox="0 0 12 12" fill="none"><path d="M10.5 1.5 1.5 10.5M10.5 5.5 5.5 10.5M10.5 9.5 9.5 10.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

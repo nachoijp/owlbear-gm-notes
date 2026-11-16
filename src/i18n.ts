@@ -200,6 +200,12 @@ export interface Strings {
   linkedItemUnlink: string;
   itemNoteTrashed: (title: string) => string;
   itemNoteMissing: (name: string) => string;
+  itemNoteNotShared: string;
+  noteGone: string;
+  mapIconTitle: string;
+  peekOpenInPanel: string;
+  peekLoading: string;
+  peekUnavailable: string;
   unnamedItem: string;
   settingsSecretLabel: string;
   secretEyeHint: string;
@@ -226,6 +232,7 @@ export interface Strings {
   settingsCloudLabel: string;
   cloudSyncHint: string;
   cloudSignInBtn: string;
+  shareSignInNotice: string;
   cloudSignOutBtn: string;
   cloudSyncNowBtn: string;
   cloudSignInError: string;
@@ -386,6 +393,12 @@ const STRINGS: Record<Language, Strings> = {
     itemNoteTrashed: (t) => `La nota vinculada, «${t}», está en la papelera. ¿Restaurarla?`,
     itemNoteMissing: (name) => `La nota vinculada a «${name}» no está en este dispositivo (se borró, o no se sincronizó). ¿Desvincular el objeto?`,
     unnamedItem: "objeto",
+    itemNoteNotShared: "Esta nota ya no está compartida.",
+    noteGone: "Esa nota ya no está en este dispositivo.",
+    mapIconTitle: "Mostrar el botón de tooltip en los tokens vinculados.",
+    peekOpenInPanel: "Abrir en el panel",
+    peekLoading: "Cargando…",
+    peekUnavailable: "No se pudo cargar la nota. Probá abrirla en el panel.",
     settingsSecretLabel: "Partes ocultas",
     secretEyeHint: "Hacer click en el ojito junto a una parte oculta la vuelve a mostrar a los jugadores. Bloquealo si preferís que el ojito solo la señale.",
     secretEyeClickBtn: "Mostrar con un click",
@@ -409,7 +422,8 @@ const STRINGS: Record<Language, Strings> = {
     exportFormatJsonBtn: "JSON",
     exportFormatMdBtn: "Markdown",
     settingsCloudLabel: "Sincronización en la nube",
-    cloudSyncHint: "Iniciá sesión con Google para sincronizar tus notas con tu propia cuenta, así te siguen a otro dispositivo. Solo vos podés verlas — iniciar sesión no comparte nada con jugadores ni otros GMs.",
+    cloudSyncHint: "Iniciá sesión con Google para sincronizar tus notas con tu propia cuenta, así te siguen a otro dispositivo. Iniciar sesión no comparte nada por sí solo; también es lo que permite compartir con los jugadores las notas que vos elijas.",
+    shareSignInNotice: "Para compartir notas con los jugadores, iniciá sesión con Google. Después volvé a elegir Visible o Público.",
     cloudSignInBtn: "Iniciar sesión con Google",
     cloudSignOutBtn: "Cerrar sesión",
     cloudSyncNowBtn: "Sincronizar ahora",
@@ -592,6 +606,12 @@ const STRINGS: Record<Language, Strings> = {
     itemNoteTrashed: (t) => `The linked note, “${t}”, is in the trash. Restore it?`,
     itemNoteMissing: (name) => `The note linked to “${name}” isn't on this device (deleted, or not synced). Unlink the item?`,
     unnamedItem: "item",
+    itemNoteNotShared: "This note isn't shared anymore.",
+    noteGone: "That note isn't on this device anymore.",
+    mapIconTitle: "Show tooltip button on linked tokens.",
+    peekOpenInPanel: "Open in the panel",
+    peekLoading: "Loading…",
+    peekUnavailable: "Couldn't load the note. Try opening it in the panel.",
     settingsSecretLabel: "Hidden parts",
     secretEyeHint: "Clicking the eye next to a hidden part shows it to players again. Lock it if you'd rather the eye only mark it.",
     secretEyeClickBtn: "Show on click",
@@ -615,7 +635,8 @@ const STRINGS: Record<Language, Strings> = {
     exportFormatJsonBtn: "JSON",
     exportFormatMdBtn: "Markdown",
     settingsCloudLabel: "Cloud sync",
-    cloudSyncHint: "Sign in with Google to sync your notes to your own account, so they follow you to another device. Only you can see them — signing in does not share anything with players or other GMs.",
+    cloudSyncHint: "Sign in with Google to sync your notes to your own account, so they follow you to another device. Signing in doesn't share anything by itself; it's also what lets you share the notes you choose with your players.",
+    shareSignInNotice: "To share notes with your players, sign in with Google. Then pick Visible or Public again.",
     cloudSignInBtn: "Sign in with Google",
     cloudSignOutBtn: "Sign out",
     cloudSyncNowBtn: "Sync now",

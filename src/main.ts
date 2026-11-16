@@ -23,8 +23,8 @@ import { getTemplates, setTemplates, resolveTemplate, toCustomTemplate, missingB
 import type { Template } from "./templates";
 import { getLanguage, setLanguage, getAccentPref, setAccentPref, getSecretEyeLocked, setSecretEyeLocked, getItemLinksEnabled, setItemLinksEnabled, getNoteSort, setNoteSort } from "./prefs";
 import type { NoteSort } from "./prefs";
-import { ITEM_LINK_CHANNEL, ITEM_LINK_KEY, isFreshRequest, isItemLinkRequestKey, itemLabel, takeItemLinkRequest } from "./itemLinks";
-import type { ItemLinkMessage, ItemLinkRequest } from "./itemLinks";
+import { ITEM_ICON_KEY, ITEM_LINK_CHANNEL, ITEM_LINK_KEY, ITEM_SHARED_KEY, PEEK_CHANNEL, isFreshRequest, isItemLinkRequestKey, itemLabel, takeItemLinkRequest } from "./itemLinks";
+import type { ItemLinkMessage, ItemLinkRequest, PeekMessage, PeekNote } from "./itemLinks";
 import type { AccentPref } from "./prefs";
 import { ACCENTS, ACCENT_ORDER, watchTheme } from "./theme";
 import {
@@ -163,6 +163,7 @@ function strings(): Strings {
 async function persist(): Promise<boolean> {
   try {
     await Promise.all([setNotes(notes), setTrash(trash), foldersLoaded ? setFolders(folders) : null]);
+    scheduleSharedMarks();
     hideStorageBanner();
     updateStorageMeter();
     return true;
@@ -234,6 +235,7 @@ function updateCloudAccountUI(user: User | null) {
   signedInRow.hidden = !user;
   signedInActions.hidden = !user;
   emailEl.textContent = user?.email || "";
+  if (user) (document.getElementById("shareSignInNotice") as HTMLElement).hidden = true;
   // Replacing the key moves this account's public copies, so it needs the account.
   (document.getElementById("sharedKeySection") as HTMLElement).hidden = !user || role !== "GM";
 }
@@ -1195,6 +1197,8 @@ async function refreshLinkedItems(noteId: string, btn: HTMLElement) {
   }
   if (!btn.isConnected) return;
   connections = { noteId, items, backlinks, btn };
+  linkedItemCount = { noteId, count: items.length };
+  updateMapIconBtn();
   const count = items.length + backlinks.length;
   btn.hidden = !count;
   (btn.querySelector(".connections-count") as HTMLElement).textContent = String(count);
@@ -1294,7 +1298,7 @@ async function unlinkErasedInScene() {
     if (!(await OBR.scene.isReady())) return;
     await OBR.scene.items.updateItems(
       (item) => typeof item.metadata[ITEM_LINK_KEY] === "string" && erased.has(item.metadata[ITEM_LINK_KEY] as string),
-      (drafts) => drafts.forEach((d) => { delete d.metadata[ITEM_LINK_KEY]; })
+      (drafts) => drafts.forEach((d) => { delete d.metadata[ITEM_LINK_KEY]; delete d.metadata[ITEM_SHARED_KEY]; delete d.metadata[ITEM_ICON_KEY]; })
     );
   } catch (err) {
     console.error("Notes: couldn't unlink items from deleted notes", err);
@@ -1302,7 +1306,7 @@ async function unlinkErasedInScene() {
 }
 async function unlinkItems(ids: string[]) {
   try {
-    await OBR.scene.items.updateItems(ids, (drafts) => drafts.forEach((d) => { delete d.metadata[ITEM_LINK_KEY]; }));
+    await OBR.scene.items.updateItems(ids, (drafts) => drafts.forEach((d) => { delete d.metadata[ITEM_LINK_KEY]; delete d.metadata[ITEM_SHARED_KEY]; delete d.metadata[ITEM_ICON_KEY]; }));
   } catch (err) {
     console.error("Notes: couldn't unlink the items", err);
   }
@@ -1316,6 +1320,7 @@ async function linkItemsTo(noteId: string) {
   } catch (err) {
     console.error("Notes: couldn't link the items", err);
   }
+  scheduleSharedMarks(true);
   activeId = noteId;
   closeDropdown();
   renderList();
@@ -1331,6 +1336,122 @@ function endItemPick() {
   updatePickBanner();
 }
 document.getElementById("pickCancelBtn")!.addEventListener("click", () => closeDropdown());
+// Linked items carry marks of their note's state, read by the background page (it has no notes):
+// ITEM_SHARED_KEY while players can see the note (visible or public), so they get "Open note" there;
+// ITEM_ICON_KEY while the note has "Icon on the map" on, so the item shows a badge. The GM who has
+// the note keeps them right: after a save that changed either, after linking, and when a scene opens
+// (so other scenes catch up then). Items linked to notes this device doesn't have (another GM's) are
+// left alone.
+const MARKS = [
+  { key: ITEM_SHARED_KEY, on: (n: Note) => !!n.public },
+  { key: ITEM_ICON_KEY, on: (n: Note) => !!n.mapIcon },
+];
+let sharedMarksDone: string | null = null;
+let sharedMarksTimer = 0;
+function scheduleSharedMarks(force = false) {
+  if (role !== "GM") return;
+  const sig = MARKS.map((m) => notes.filter(m.on).map((n) => n.id).sort().join(",")).join("|");
+  if (!force && sig === sharedMarksDone) return;
+  window.clearTimeout(sharedMarksTimer);
+  sharedMarksTimer = window.setTimeout(() => void syncSharedMarks(sig), 300);
+}
+async function syncSharedMarks(sig: string) {
+  try {
+    if (!(await OBR.scene.isReady())) return;
+    const byId = new Map<string, Note | null>();
+    trash.forEach((t) => byId.set(t.id, null));
+    notes.forEach((n) => byId.set(n.id, n));
+    // Per mark: whether the item should have it, or null to leave it alone.
+    const want = (metadata: Record<string, unknown>, mark: (typeof MARKS)[number]): boolean | null => {
+      const id = metadata[ITEM_LINK_KEY];
+      if (typeof id !== "string") return false;
+      if (!byId.has(id)) return null;
+      const n = byId.get(id);
+      return !!n && mark.on(n);
+    };
+    const wrong = (metadata: Record<string, unknown>) => MARKS.some((m) => {
+      const w = want(metadata, m);
+      return w !== null && w !== (metadata[m.key] === true);
+    });
+    const items = await OBR.scene.items.getItems((item) => wrong(item.metadata));
+    if (items.length) {
+      await OBR.scene.items.updateItems(items.map((i) => i.id), (drafts) => drafts.forEach((d) => {
+        MARKS.forEach((m) => {
+          const w = want(d.metadata, m);
+          if (w === null) return;
+          if (w) d.metadata[m.key] = true;
+          else delete d.metadata[m.key];
+        });
+      }));
+    }
+    // Only now: a failed write is tried again on the next save.
+    sharedMarksDone = sig;
+  } catch (err) {
+    console.error("Notes: couldn't update the marks on linked items", err);
+  }
+}
+// The quick view of a note (peek.html, opened from a map badge, or following a link in it) asks for
+// it here. It gets the note as this panel would show it: links with their notes' current titles (a
+// player's link to a note not shared with them is plain text), and the sections folded as they are
+// here (the GM's are in the note; a player's, in playerFolds).
+function answerPeek(noteId: string, nonce: string) {
+  let note: PeekNote | null = null;
+  const s = strings();
+  const box = document.createElement("div");
+  if (isPlayerView()) {
+    // Not loaded yet: no answer, the quick view asks again.
+    if (sharedState === "loading") return;
+    const n = sharedNotes.find((x) => x.id === noteId);
+    if (n) {
+      box.innerHTML = n.html;
+      box.querySelectorAll(".note-link").forEach((l) => {
+        if (!sharedNotes.some((x) => x.id === l.getAttribute(LINK_ATTR))) l.replaceWith(document.createTextNode(l.textContent || ""));
+      });
+      syncLinks(box, (id) => {
+        const t = sharedNotes.find((x) => x.id === id);
+        return t ? { title: t.title, gone: false } : null;
+      }, s.untitled);
+      const folds = playerFolds.get(n.id);
+      if (folds) {
+        headingKeys(box).forEach(([h, key]) => {
+          const collapsed = folds.get(key);
+          if (collapsed === true) h.setAttribute("data-collapsed", "");
+          else if (collapsed === false) h.removeAttribute("data-collapsed");
+        });
+      }
+      note = { title: n.title, html: box.innerHTML, gm: false };
+    }
+  } else if (role === "GM") {
+    const n = notes.find((x) => x.id === noteId);
+    if (n) {
+      box.innerHTML = n.html;
+      syncLinks(box, linkTarget, s.untitled);
+      note = { title: n.title, html: box.innerHTML, gm: true };
+    }
+  }
+  void OBR.broadcast.sendMessage(PEEK_CHANNEL, { type: "note", nonce, note } satisfies PeekMessage, { destination: "LOCAL" });
+}
+// A player's "Open note" on an item: the shared note opens once the shared notes have loaded.
+let pendingSharedOpen: string | null = null;
+function openSharedFromItem(id: string) {
+  if (sharedState === "loading") {
+    pendingSharedOpen = id;
+    return;
+  }
+  pendingSharedOpen = null;
+  if (sharedState === "error") {
+    window.alert(strings().sharedLoadError);
+    return;
+  }
+  if (!sharedNotes.some((n) => n.id === id)) {
+    window.alert(strings().itemNoteNotShared);
+    return;
+  }
+  playerActiveId = id;
+  closeDropdown();
+  renderList();
+  renderEditor();
+}
 // Each request is handled once, whichever way it arrives first (message or localStorage).
 let lastItemRequestAt = 0;
 function receiveItemLinkRequest(request: ItemLinkRequest) {
@@ -1345,7 +1466,11 @@ function checkItemLinkRequest() {
   void OBR.broadcast.sendMessage(ITEM_LINK_CHANNEL, { type: "hello" } satisfies ItemLinkMessage, { destination: "LOCAL" });
 }
 async function handleItemLinkRequest(r: ItemLinkRequest) {
-  if (role !== "GM" || !itemLinksEnabled) return;
+  if (role !== "GM") {
+    if (isPlayerView() && r.action === "open" && r.noteId) openSharedFromItem(r.noteId);
+    return;
+  }
+  if (!itemLinksEnabled) return;
   const s = strings();
   if (r.action === "open") {
     const id = r.noteId || "";
@@ -1362,7 +1487,9 @@ async function handleItemLinkRequest(r: ItemLinkRequest) {
       if (window.confirm(s.itemNoteTrashed(trashed.title || s.untitled))) await restoreFromTrash(id);
       return;
     }
-    if (window.confirm(s.itemNoteMissing(r.names[0] || s.unnamedItem))) await unlinkItems(r.itemIds);
+    // From a quick view's link the item was never linked to this note: nothing to unlink.
+    if (r.noteOnly) window.alert(s.noteGone);
+    else if (window.confirm(s.itemNoteMissing(r.names[0] || s.unnamedItem))) await unlinkItems(r.itemIds);
     return;
   }
   itemPick = { itemIds: r.itemIds, names: r.names };
@@ -1690,7 +1817,32 @@ const brandPill = document.getElementById("brandPill") as HTMLButtonElement;
 function sharingAvailable(): boolean {
   return role === "GM" && cloudSyncAvailable() && !!getActive();
 }
+// "Icon on the map": a toggle in the note's title row (rebuilt with the editor, so looked up), shown
+// only while the note has map items linked in the open scene (see refreshLinkedItems).
+let linkedItemCount: { noteId: string; count: number } = { noteId: "", count: 0 };
+function updateMapIconBtn() {
+  const mapIconBtn = document.getElementById("gmMapIconBtn") as HTMLButtonElement | null;
+  if (!mapIconBtn) return;
+  const s = strings();
+  const note = role === "GM" && !isPlayerView() ? getActive() : undefined;
+  mapIconBtn.hidden = !note || !itemLinksEnabled || linkedItemCount.noteId !== note.id || !linkedItemCount.count;
+  const on = !!note && !!note.mapIcon;
+  mapIconBtn.setAttribute("aria-pressed", String(on));
+  mapIconBtn.title = s.mapIconTitle;
+  mapIconBtn.setAttribute("aria-label", mapIconBtn.title);
+}
+function toggleMapIcon() {
+  const n = role === "GM" ? notes.find((x) => x.id === activeId) : undefined;
+  if (!n) return;
+  if (n.mapIcon) delete n.mapIcon;
+  else n.mapIcon = true;
+  n.updatedAt = Date.now();
+  markNoteDirty(n.id);
+  updateMapIconBtn();
+  void persist();
+}
 function updateBrandPill() {
+  updateMapIconBtn();
   const s = strings();
   const mode = isPlayerView() ? (getActive()?.editable ? "editable" : "visible") : shareMode(getActive());
   const sharing = sharingAvailable();
@@ -1766,7 +1918,7 @@ function chooseShareMode(id: string, mode: ShareMode) {
   const current = shareMode(note);
   if (mode === current) return;
   if (mode !== "private" && !canPublish()) {
-    openSettings();
+    openSettings("share");
     return;
   }
   if (mode === "private" || (mode === "visible" && current === "editable")) void setNoteMode(id, mode);
@@ -2212,6 +2364,7 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   containerEl.innerHTML =
     toolbarHtml +
     `<div class="title-row"><input class="note-title-input" id="${idPrefix}TitleInput" placeholder="${escapeHtml(s.titlePlaceholder)}" value="${escapeHtml(seed.title)}" />` +
+    (player ? "" : `<button type="button" class="map-icon-toggle" id="${idPrefix}MapIconBtn" aria-pressed="false" hidden><svg viewBox="0 0 16 16" fill="none"><path d="M3.5 3h9A1.5 1.5 0 0 1 14 4.5v5.5a1.5 1.5 0 0 1-1.5 1.5H8l-3 2.5v-2.5H3.5A1.5 1.5 0 0 1 2 10V4.5A1.5 1.5 0 0 1 3.5 3Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5 6.2h6M5 8.4h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>`) +
     `<button type="button" class="connections-btn" id="${idPrefix}ConnectionsBtn" hidden aria-haspopup="dialog"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6.6 9.4a2.8 2.8 0 0 0 4 0l2.3-2.3a2.8 2.8 0 0 0-4-4L7.8 4.2M9.4 6.6a2.8 2.8 0 0 0-4 0L3.1 8.9a2.8 2.8 0 0 0 4 4l1.1-1.1" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg><span class="connections-count">0</span></button></div>` +
     `<div class="lock-banner" id="${idPrefix}LockBanner" role="status" hidden></div>` +
     `<div class="editor-scroll"><div class="secret-layer" id="${idPrefix}SecretLayer" aria-hidden="true"></div><div class="editor-surface" id="${idPrefix}EditorSurface" contenteditable="true" data-placeholder="${escapeHtml(s.bodyPlaceholder)}"></div></div>` +
@@ -2251,6 +2404,10 @@ function buildNoteEditor(containerEl: HTMLElement, idPrefix: string, noteId: str
   }
   const connectionsBtn = document.getElementById(idPrefix + "ConnectionsBtn") as HTMLElement;
   connectionsBtn.addEventListener("click", toggleConnections);
+  if (!player) {
+    document.getElementById(idPrefix + "MapIconBtn")!.addEventListener("click", toggleMapIcon);
+    updateMapIconBtn();
+  }
   closeConnections();
   if (!player) {
     linkedItemsRefresh = () => void refreshLinkedItems(seed.id, connectionsBtn);
@@ -5001,12 +5158,14 @@ function startSharedWatch() {
           const newest = sharedNotes.slice().sort((a, b) => b.updatedAt - a.updatedAt)[0];
           playerActiveId = newest ? newest.id : null;
         }
+        if (pendingSharedOpen) openSharedFromItem(pendingSharedOpen);
         renderList();
         renderEditor();
       },
       (err) => {
         console.error("Notes: failed to load the public notes", err);
         sharedState = "error";
+        if (pendingSharedOpen) openSharedFromItem(pendingSharedOpen);
         renderList();
         renderEditor();
       }
@@ -5191,7 +5350,8 @@ settingsAccentRow.addEventListener("click", (ev) => {
   renderAccentOptions();
 });
 
-function openSettings() {
+// "share": opened because sharing needs the account; says so above the sign-in button and goes there.
+function openSettings(reason?: "share") {
   renderAccentOptions();
   updateStorageMeter();
   const cloudSection = document.getElementById("cloudSyncSection");
@@ -5202,12 +5362,19 @@ function openSettings() {
       prepareCloudSync();
     }
   }
+  const notice = document.getElementById("shareSignInNotice") as HTMLElement;
+  notice.hidden = reason !== "share" || !cloudSyncAvailable() || !!getCurrentUser();
   settingsOverlay.hidden = false;
+  if (!notice.hidden) {
+    notice.scrollIntoView({ block: "center" });
+    (document.getElementById("cloudSignInBtn") as HTMLElement).focus({ preventScroll: true });
+  }
 }
 function closeSettings() {
   settingsOverlay.hidden = true;
+  (document.getElementById("shareSignInNotice") as HTMLElement).hidden = true;
 }
-document.getElementById("settingsBtn")!.addEventListener("click", openSettings);
+document.getElementById("settingsBtn")!.addEventListener("click", () => openSettings());
 
 // Each Settings section's explanation sits behind an "i" next to its title: shown on hover, on
 // keyboard focus, or while clicked open (touch screens have no hover). The explanation keeps its
@@ -5358,6 +5525,7 @@ document.getElementById("itemLinksRow")!.addEventListener("click", (ev) => {
   itemLinksEnabled = on;
   void setItemLinksEnabled(on);
   updateItemLinksButtons();
+  updateMapIconBtn();
   if (linkedItemsRefresh) linkedItemsRefresh();
 });
 function updateItemLinksButtons() {
@@ -5431,6 +5599,7 @@ function applyLanguage() {
   document.getElementById("settingsCloudLabel")!.textContent = s.settingsCloudLabel;
   document.getElementById("cloudSyncHint")!.textContent = s.cloudSyncHint;
   document.getElementById("cloudSignInBtn")!.textContent = s.cloudSignInBtn;
+  document.getElementById("shareSignInNotice")!.textContent = s.shareSignInNotice;
   document.getElementById("cloudSignOutBtn")!.textContent = s.cloudSignOutBtn;
   document.getElementById("settingsItemLinksLabel")!.textContent = s.settingsItemLinksLabel;
   document.getElementById("itemLinksHint")!.textContent = s.itemLinksHint;
@@ -5487,30 +5656,17 @@ const sizeHint = document.getElementById("sizeHint")!;
   let startX = 0, startY = 0, startW = 0, startH = 0, dragging = false;
   let pendingW = 0, pendingH = 0, commitRAF: number | null = null;
 
-  // Owlbear silently caps how big the host popover iframe can actually get, but there's no signal
-  // for it anywhere in its SDK: getWidth()/getHeight() just echo back the last value we asked for,
-  // never the real rendered size, confirmed by logging both side by side while dragging well past the
-  // visible edge of the screen. A screen.availWidth/availHeight-based guess isn't right either — it
-  // reflects the MONITOR, not the actual (possibly smaller, possibly on a different monitor) browser
-  // window. What does work: this popover's content is OUR OWN iframe, so window.innerWidth/innerHeight
-  // are the real, current, live size the host genuinely rendered us at, whatever the real limit came
-  // from. The native `resize` event fires whenever that changes, so syncToRealViewport() snaps the
-  // panel back down the moment it's bigger than what's actually there.
+  // Outside a drag the panel fills the popover (100%, as in CSS), whatever size Owlbear gives it: a
+  // capped size, a browser zoom, a resize from Owlbear itself. (It used to keep a pixel size, and
+  // shrink it to the popover on a resize; a resize in the middle of a zoom then left it stuck smaller
+  // than the popover.) A drag may overshoot what Owlbear allows while it lasts; letting go fixes that.
   //
-  // A live predictive clamp during the drag itself (so the panel never LOOKS oversized even mid-drag)
-  // was also tried, remembering the real boundary the first time it's discovered and clamping pointer
-  // movement against it directly — but overlapping resize requests fired on every animation frame
-  // during a fast drag let their responses land out of order, which made that tracking misfire and
-  // wrongly cap the panel from ever growing back after being shrunk. Given the choice, landing on the
-  // correct size the moment you let go is what actually matters — a live-clamped drag is a nice-to-have
-  // that isn't worth that risk, so this stays reactive-only: it can overshoot visibly WHILE dragging,
-  // but always corrects on release.
+  // A live predictive clamp during the drag itself was tried once: overlapping resize requests let
+  // their answers land out of order and wrongly capped the panel, so it stays reactive.
   function syncToRealViewport() {
-    const realW = window.innerWidth - PANEL_MARGIN * 2;
-    const realH = window.innerHeight - PANEL_MARGIN * 2;
-    const rect = panel.getBoundingClientRect();
-    if (rect.width > realW + 0.5) panel.style.width = `${Math.max(300, realW)}px`;
-    if (rect.height > realH + 0.5) panel.style.height = `${Math.max(280, realH)}px`;
+    if (dragging) return;
+    panel.style.width = "";
+    panel.style.height = "";
   }
   window.addEventListener("resize", syncToRealViewport);
 
@@ -5547,10 +5703,29 @@ const sizeHint = document.getElementById("sizeHint")!;
     panel.classList.remove("resizing");
     if (commitRAF !== null) { cancelAnimationFrame(commitRAF); commitRAF = null; }
     const rect = panel.getBoundingClientRect();
-    void Promise.all([
-      OBR.action.setWidth(Math.round(rect.width) + PANEL_MARGIN * 2),
-      OBR.action.setHeight(Math.round(rect.height) + PANEL_MARGIN * 2),
-    ]).then(syncToRealViewport);
+    const wantW = Math.round(rect.width) + PANEL_MARGIN * 2;
+    const wantH = Math.round(rect.height) + PANEL_MARGIN * 2;
+    void Promise.all([OBR.action.setWidth(wantW), OBR.action.setHeight(wantH)]).then(() => fillWhenSized(wantW, wantH));
+  }
+  // The pixel size the drag gave the panel is only for the drag: once Owlbear has sized the popover,
+  // the panel goes back to filling it (100%, as in CSS), so it follows the popover from then on (a
+  // browser zoom, say, which resizes the popover but not a panel left in pixels).
+  let fillTimer = 0;
+  function fillWhenSized(wantW: number, wantH: number) {
+    window.clearTimeout(fillTimer);
+    const started = Date.now();
+    const check = () => {
+      if (dragging) return;
+      const sized = Math.abs(window.innerWidth - wantW) <= 1 && Math.abs(window.innerHeight - wantH) <= 1;
+      // Owlbear may cap the size (or apply it a little later): after a while, fill whatever it gave.
+      if (sized || Date.now() - started > 600) {
+        panel.style.width = "";
+        panel.style.height = "";
+        return;
+      }
+      fillTimer = window.setTimeout(check, 30);
+    };
+    check();
   }
   handle.addEventListener("pointerup", stop);
   handle.addEventListener("pointercancel", stop);
@@ -5791,6 +5966,7 @@ async function boot() {
       role = player.role;
       applyRoleView();
       followOwnShared();
+      scheduleSharedMarks(true);
     }
   });
 
@@ -5800,6 +5976,10 @@ async function boot() {
     const message = event.data as ItemLinkMessage;
     if (message.type === "request" && isFreshRequest(message.request)) receiveItemLinkRequest(message.request);
   });
+  OBR.broadcast.onMessage(PEEK_CHANNEL, (event) => {
+    const message = event.data as PeekMessage;
+    if (message && message.type === "want" && typeof message.noteId === "string") answerPeek(message.noteId, message.nonce);
+  });
   checkItemLinkRequest();
   window.addEventListener("storage", (ev) => {
     if (isItemLinkRequestKey(ev.key) && ev.newValue) checkItemLinkRequest();
@@ -5808,10 +5988,14 @@ async function boot() {
     if (open) checkItemLinkRequest();
   });
   OBR.scene.onReadyChange((ready) => {
-    if (ready) void unlinkErasedInScene();
+    if (ready) {
+      void unlinkErasedInScene();
+      scheduleSharedMarks(true);
+    }
     if (linkedItemsRefresh) linkedItemsRefresh();
   });
   void unlinkErasedInScene();
+  scheduleSharedMarks(true);
 }
 
 OBR.onReady(() => {

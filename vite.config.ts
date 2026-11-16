@@ -41,12 +41,14 @@ function devManifestName(): Plugin {
 
 export default defineConfig({
   plugins: [dropLocalManifest(), devManifestName()],
-  // Two pages: the panel, and the background page (always loaded, so built apart and kept tiny).
+  // Three pages: the panel, the background page (always loaded, so built apart and kept tiny) and a
+  // note's quick view (peek.html, opened from a map badge).
   build: {
     rollupOptions: {
       input: {
         main: resolve(import.meta.dirname, "index.html"),
         background: resolve(import.meta.dirname, "background.html"),
+        peek: resolve(import.meta.dirname, "peek.html"),
       },
     },
   },

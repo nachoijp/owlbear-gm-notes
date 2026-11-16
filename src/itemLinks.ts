@@ -7,6 +7,28 @@
 import { getPluginId } from "./pluginId";
 
 export const ITEM_LINK_KEY = getPluginId("note");
+// Set (true) on a linked item while its note is shared with players (visible or public), so the
+// background page can offer them "Open note" without asking Firebase. Kept by the note's GM (main.ts).
+export const ITEM_SHARED_KEY = getPluginId("shared-note");
+// Set (true) on a linked item while its note has "Icon on the map" on (Note.mapIcon): each player's
+// background page then draws a badge on it (a local item, BADGE_KEY), and a double click on the badge
+// opens the note's quick view (peek.html). Players get it only on items that are also shared.
+export const ITEM_ICON_KEY = getPluginId("map-icon");
+export const BADGE_KEY = getPluginId("badge");
+export const PEEK_POPOVER_ID = getPluginId("peek");
+// The quick view asks the panel for the note (the panel has the notes, or the player's shared ones)
+// and asks the background page to open it in the panel.
+export const PEEK_CHANNEL = getPluginId("peek");
+export interface PeekNote {
+  title: string;
+  html: string;
+  /** The GM's own note: its hidden parts are boxed, as in the panel. */
+  gm: boolean;
+}
+export type PeekMessage =
+  | { type: "want"; noteId: string; nonce: string }
+  | { type: "note"; nonce: string; note: PeekNote | null }
+  | { type: "open"; noteId: string; itemId: string; name: string; noteOnly: boolean };
 export const ITEM_LINKS_PREF_KEY = getPluginId("itemLinks");
 const PENDING_KEY = getPluginId("pending-item-link");
 // A request older than this was never picked up (the panel didn't open): it's dropped.
@@ -22,6 +44,9 @@ export interface ItemLinkRequest {
   itemIds: string[];
   names: string[];
   noteId?: string;
+  /** Opening a note reached from a quick view's link: the item isn't linked to it, so nothing about
+   * the item (unlinking it) is offered. */
+  noteOnly?: boolean;
   at: number;
 }
 

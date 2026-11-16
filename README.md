@@ -156,11 +156,20 @@ with everything else:
   a door, a marker…) and choose **Link note**, then pick the note. From
   then on, **Open note** in that same menu opens it. Select several items
   to link them all to the same note.
+- **Players open shared notes from the map**: when an item's note is
+  visible or public, players get **Open note** on that item too. Items with
+  private notes show them nothing.
+- **Icon on the map**: once a note has linked items, a round speech-bubble
+  button shows in its title row; turn it on to put a small icon on them. **Double-click** the icon for a quick
+  view of the note right there on the map, with **Open in the panel** to go
+  on from it. Turn it on only for notes worth a glance (an NPC's tactics, a
+  door's trap), so the map stays clean. Players see the icon only on items
+  whose note is shared with them, and never on hidden items.
 - **A note's connections**: the small button at the end of its title shows
   how many map items and notes link to it. Click it to see them: click an
   item to select it on the map (× unlinks it), or a note to open it. A
   note deleted for good is unlinked from its items. **Settings → Linked items** takes the menu entry out
-  (the links are kept). Only the GM sees any of this.
+  (the links are kept). Only the GM sees the connections.
 
 ![A link to another note, and the note picker open](docs/screenshot-links.png)
 
